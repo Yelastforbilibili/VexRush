@@ -27,18 +27,18 @@ BAR_GAP = 7.0
 META_GAP = 9.0
 DIVIDER_GAP = 9.0
 
-CHANNEL_LABELS = ("连点1", "连点2")
+CHANNEL_LABELS = ("click_1", "click_2")
 
 
 def _meta_sample(cfg: OverlayConfig) -> str:
     """用于测量「元信息」列宽的样板串，保证面板宽度不随数字跳动。"""
     parts = []
     if cfg.show_state:
-        parts.append(tr("运行"))
+        parts.append(tr("running"))
     if cfg.show_cps:
-        parts.append(tr("999.9 次/秒"))
+        parts.append(tr("999_9_clicks_s"))
     if cfg.show_count:
-        parts.append(tr("9,999,999 次"))
+        parts.append(tr("9_999_999_clicks"))
     if cfg.show_interval:
         parts.append("2000 ms")
     return "  ".join(parts)
@@ -210,15 +210,15 @@ class OverlayWindow(QWidget):
         parts = []
         if self.cfg.show_state:
             if row.get("clicking"):
-                parts.append(tr("运行"))
+                parts.append(tr("running"))
             elif row.get("enabled"):
-                parts.append(tr("就绪"))
+                parts.append(tr("ready"))
             else:
-                parts.append(tr("暂停"))
+                parts.append(tr("paused"))
         if self.cfg.show_cps:
-            parts.append(tr("%.1f 次/秒") % float(row.get("cps") or 0.0))
+            parts.append(tr("clicks_s_3") % float(row.get("cps") or 0.0))
         if self.cfg.show_count:
-            parts.append(tr("{:,} 次").format(int(row.get("count") or 0)))
+            parts.append(tr("clicks").format(int(row.get("count") or 0)))
         if self.cfg.show_interval:
             parts.append("%d ms" % int(row.get("interval") or 0))
         return "  ".join(parts)
@@ -361,7 +361,8 @@ class OverlayWindow(QWidget):
         if self._drag_active and self._drag_target is not None and self.cfg.drag_smooth:
             current = self.pos()
             target = self._drag_target
-            k = 1.0 - math.exp(-dt * max(6, int(self.cfg.drag_ease)))
+            # 单帧最多走 45%，否则按下瞬间移动时会「瞬移」过去
+            k = min(0.45, 1.0 - math.exp(-dt * max(6, int(self.cfg.drag_ease))))
             nx = current.x() + (target.x() - current.x()) * k
             ny = current.y() + (target.y() - current.y()) * k
             if abs(target.x() - nx) < 0.6:
@@ -688,6 +689,9 @@ class OverlayWindow(QWidget):
             self._drag_target = self.pos()
             self._drag_active = True
             self._vel = QPointF(0.0, 0.0)
+            now = time.perf_counter()
+            self._last_frame = now      # 首帧 dt 从按下这一刻算，避免一步跳太远
+            self._drag_stamp = now
             event.accept()
             return
         super().mousePressEvent(event)
@@ -748,21 +752,21 @@ class OverlayWindow(QWidget):
                 action.triggered.connect(callback)
             menu.addAction(action)
 
-        add(tr("锁定位置"), self.cfg.locked, self._toggle_locked)
-        add(tr("点击穿透"), self.cfg.click_through, self._toggle_click_through)
+        add(tr("lock_position"), self.cfg.locked, self._toggle_locked)
+        add(tr("click_through"), self.cfg.click_through, self._toggle_click_through)
         menu.addSeparator()
-        add(tr("显示标题"), self.cfg.show_title, lambda: self._toggle_field("show_title", not self.cfg.show_title))
-        add(tr("显示状态"), self.cfg.show_state, lambda: self._toggle_field("show_state", not self.cfg.show_state))
-        add(tr("显示速率"), self.cfg.show_cps, lambda: self._toggle_field("show_cps", not self.cfg.show_cps))
-        add(tr("显示次数"), self.cfg.show_count, lambda: self._toggle_field("show_count", not self.cfg.show_count))
-        add(tr("显示间隔"), self.cfg.show_interval, lambda: self._toggle_field("show_interval", not self.cfg.show_interval))
+        add(tr("show_title"), self.cfg.show_title, lambda: self._toggle_field("show_title", not self.cfg.show_title))
+        add(tr("show_status"), self.cfg.show_state, lambda: self._toggle_field("show_state", not self.cfg.show_state))
+        add(tr("show_rate"), self.cfg.show_cps, lambda: self._toggle_field("show_cps", not self.cfg.show_cps))
+        add(tr("show_count"), self.cfg.show_count, lambda: self._toggle_field("show_count", not self.cfg.show_count))
+        add(tr("show_interval"), self.cfg.show_interval, lambda: self._toggle_field("show_interval", not self.cfg.show_interval))
         menu.addSeparator()
-        add(tr("彩虹特效"), self.cfg.rainbow, lambda: self._toggle_field("rainbow", not self.cfg.rainbow))
-        add(tr("横向排布"), self.cfg.layout == "h",
+        add(tr("rainbow_effect"), self.cfg.rainbow, lambda: self._toggle_field("rainbow", not self.cfg.rainbow))
+        add(tr("horizontal_layout"), self.cfg.layout == "h",
             lambda: self._set_value("layout", "v" if self.cfg.layout == "h" else "h"))
         menu.addSeparator()
-        add(tr("悬浮显示设置…"), None, self.requestSettings.emit)
-        add(tr("关闭悬浮显示"), None, self.requestHide.emit)
+        add(tr("hud_settings"), None, self.requestSettings.emit)
+        add(tr("hide_hud"), None, self.requestHide.emit)
         return menu
 
     def contextMenuEvent(self, event) -> None:

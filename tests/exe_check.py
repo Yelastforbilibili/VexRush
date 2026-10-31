@@ -8,6 +8,7 @@
 import ctypes
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,7 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DIST = os.path.join(ROOT, "dist")
 EXE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(DIST, "VexRush.exe")
-CONFIG = os.path.join(os.path.dirname(EXE), "config.json")
+TEST_APPDATA = os.path.join(ROOT, "__appdata_test")
+CONFIG = os.path.join(TEST_APPDATA, "VexRush", "config.json")
 TMP = os.path.join(ROOT, "_tmp")
 SHOT = os.path.join(ROOT, "__exe_real.png")
 
@@ -102,6 +104,7 @@ def find_window(timeout=45.0):
 
 def launch():
     env = dict(os.environ)
+    env["APPDATA"] = TEST_APPDATA
     env["TEMP"] = TMP          # 沙箱里子进程没法在真实 %TEMP% 建目录，指到工程内
     env["TMP"] = TMP
     return subprocess.Popen([EXE], cwd=os.path.dirname(EXE), env=env,
@@ -159,7 +162,10 @@ def main():
         print("找不到 exe：%s" % EXE)
         return 1
     os.makedirs(TMP, exist_ok=True)
-    for path in (CONFIG, SHOT):
+    shutil.rmtree(TEST_APPDATA, ignore_errors=True)
+    os.makedirs(TEST_APPDATA, exist_ok=True)
+    # exe 旁边的老 config.json 会被程序当成「便携配置」搬到数据目录，测试里先清掉
+    for path in (CONFIG, SHOT, os.path.join(DIST, "config.json")):
         try:
             os.remove(path)
         except Exception:

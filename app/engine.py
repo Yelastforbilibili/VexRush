@@ -82,7 +82,7 @@ class InputHub(QObject):
             self._key_listener.start()
             self._started = True
         except Exception as exc:  # pragma: no cover - 依赖系统环境
-            self.failed.emit(tr("全局监听启动失败：%s") % exc)
+            self.failed.emit(tr("failed_to_start_global_listener") % exc)
             self._started = False
         return self._started
 

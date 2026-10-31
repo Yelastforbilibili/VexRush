@@ -91,11 +91,11 @@ def display_name(setting: str) -> str:
     setting = (setting or "").strip()
     bundled = load_bundled()
     if not setting or setting == BUILTIN_KEY:
-        name = bundled.get("builtin")
-        shown = tr("内置 · 寒蝉半圆体")
-        return ("%s · %s" % (shown, name)) if name else tr("内置字体（未加载）")
+        if not bundled.get("builtin"):
+            return tr("built_in_font_not_loaded")
+        return tr("built_in_chillround_m")
     if setting.startswith(SYSTEM_PREFIX):
-        return tr("系统 · %s") % setting[len(SYSTEM_PREFIX):]
+        return tr("system") % setting[len(SYSTEM_PREFIX):]
     return setting
 
 

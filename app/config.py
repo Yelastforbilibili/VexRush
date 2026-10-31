@@ -19,7 +19,8 @@ from .i18n import tr
 
 APP_NAME = "VexRush"
 APP_ID = "VexRush.Clicker.1"
-APP_VERSION = "3.0.0"
+GITHUB_URL = "https://github.com/Yelastforbilibili/VexRush"
+APP_VERSION = "3.1.0"
 CONFIG_NAME = "config.json"
 CONFIG_VERSION = 2
 
@@ -27,19 +28,19 @@ INTERVAL_MIN = 1
 INTERVAL_MAX = 2000
 CHANNEL_COUNT = 2
 
-MOUSE_BUTTONS = (("left", "鼠标左键"), ("right", "鼠标右键"), ("middle", "鼠标中键"))
+MOUSE_BUTTONS = (("left", "left_button"), ("right", "right_button"), ("middle", "middle_button"))
 
 DEFAULT_OVERLAY_TITLE = "VexRush"
 
 
 def default_channel_name(index: int) -> str:
-    return tr("连点%d") % (index + 1)
+    return tr("click") % (index + 1)
 
 
 def display_channel_name(index: int, name: str) -> str:
     """没改过名的通道跟随界面语言显示，改过名的原样显示。"""
     plain = "连点%d" % (index + 1)
-    return tr(plain) if (name or plain) == plain else name
+    return (tr("click") % (index + 1)) if (name or plain) == plain else name
 
 
 def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
@@ -95,16 +96,38 @@ def _dir_writable(path: str) -> bool:
         return False
 
 
-def config_path() -> str:
-    primary = app_dir()
-    if _dir_writable(primary):
-        return os.path.join(primary, CONFIG_NAME)
-    fallback = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "VexRush")
+def data_dir() -> str:
+    """用户数据目录：%APPDATA%\\VexRush（配置、语言文件都放这里）。"""
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    target = os.path.join(base, APP_NAME) if APP_NAME == "VexRush" else os.path.join(base, "VexRush")
     try:
-        os.makedirs(fallback, exist_ok=True)
+        os.makedirs(target, exist_ok=True)
     except OSError:
         pass
-    return os.path.join(fallback, CONFIG_NAME)
+    return target
+
+
+def lang_dir() -> str:
+    """语言文件目录：<数据目录>\\lang。"""
+    target = os.path.join(data_dir(), "lang")
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError:
+        pass
+    return target
+
+
+def config_path() -> str:
+    """配置文件固定在数据目录里；老版本放在 exe 旁边，首次运行时搬过去。"""
+    target = os.path.join(data_dir(), CONFIG_NAME)
+    legacy = os.path.join(app_dir(), CONFIG_NAME)
+    if not os.path.exists(target) and os.path.exists(legacy):
+        try:
+            with open(legacy, "rb") as source, open(target, "wb") as sink:
+                sink.write(source.read())
+        except OSError:
+            pass
+    return target
 
 
 # ---------------------------------------------------------------- 通道
@@ -121,6 +144,8 @@ class ChannelConfig:
     enabled: bool = False
 
     def normalize(self, index: int) -> "ChannelConfig":
+        from .winapi import canon_key      # 惰性导入：config 与 winapi 互相引用
+
         self.name = (str(self.name or "").strip()[:8]) or default_channel_name(index)
         self.interval_ms = _clamp_int(self.interval_ms, INTERVAL_MIN, INTERVAL_MAX, 15)
         self.trigger_kind = _pick(self.trigger_kind, {"mouse", "key"}, "mouse")
@@ -132,7 +157,8 @@ class ChannelConfig:
             self.trigger_kind = "mouse"
         if not self.trigger_key:
             self.trigger_kind = "mouse"
-        self.hotkey = (str(self.hotkey or "").strip().lower()[:24]) or ("f1" if index == 0 else "f2")
+        self.hotkey = canon_key(str(self.hotkey or "")[:24]) or ("f1" if index == 0 else "f2")
+        self.trigger_key = canon_key(str(self.trigger_key or ""))
         self.enabled = bool(self.enabled)
         return self
 
@@ -161,18 +187,18 @@ class ChannelConfig:
 
 
 def default_channels() -> List[ChannelConfig]:
-    first = ChannelConfig(name=tr("连点1"), trigger_mouse="left", sim_mouse="left", hotkey="f1")
-    second = ChannelConfig(name=tr("连点2"), trigger_mouse="right", sim_mouse="right", hotkey="f2")
+    first = ChannelConfig(name="连点1", trigger_mouse="left", sim_mouse="left", hotkey="f1")
+    second = ChannelConfig(name="连点2", trigger_mouse="right", sim_mouse="right", hotkey="f2")
     return [first, second]
 
 
 # ---------------------------------------------------------------- 外观
 
-LANGUAGES = {"zh": "简体中文", "en": "English"}
+LANGUAGES = {"zh_cn": "简体中文", "en_us": "English"}  # 仅作默认值，实际列表来自语言包
 
 # 悬浮窗入场/出场动画可选值
-OVERLAY_ANIM_ITEMS = (("fade", "淡入"), ("scale", "缩放"), ("slide", "滑入"),
-                      ("spring", "弹簧"), ("blur", "柔焦"), ("none", "无"))
+OVERLAY_ANIM_ITEMS = (("fade", "fade"), ("scale", "scale"), ("slide", "slide"),
+                      ("spring", "spring"), ("blur", "blur"), ("none", "none"))
 OVERLAY_ANIMS = {key for key, _label in OVERLAY_ANIM_ITEMS}
 
 
@@ -190,7 +216,7 @@ class AppearanceConfig:
         self.theme = _pick(self.theme, set(theme_mod.THEMES), theme_mod.DEFAULT_THEME)
         self.accent = _pick(self.accent, accents, theme_mod.DEFAULT_ACCENT)
         self.font_scale = _pick(self.font_scale, set(theme_mod.FONT_SCALES), theme_mod.DEFAULT_FONT_SCALE)
-        self.language = _pick(self.language, set(LANGUAGES), "zh")
+        self.language = str(self.language or "").strip() or "zh_cn"
         color = str(self.custom_accent or "").strip()
         if len(color) == 7 and color.startswith("#"):
             try:
@@ -310,7 +336,8 @@ class AppConfig:
     auto_detect: bool = True
     exclusive: bool = False        # 防卡手：同一时间只允许一路开启
     restore_previous: bool = True  # 防卡手：关闭后恢复上一路
-    ignore_ime: bool = True        # 输入法正在输入时不响应热键与键盘触发
+    ignore_ime: bool = True        # 在输入框里打字时不响应热键与键盘触发
+    smooth_window: bool = True     # 拖动边框/标题栏时窗口缓动跟随鼠标
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     channels: List[ChannelConfig] = field(default_factory=default_channels)
@@ -325,6 +352,7 @@ class AppConfig:
         self.exclusive = bool(self.exclusive)
         self.restore_previous = bool(self.restore_previous)
         self.ignore_ime = bool(self.ignore_ime)
+        self.smooth_window = bool(self.smooth_window)
         self.appearance = (self.appearance or AppearanceConfig()).normalize()
         self.overlay = (self.overlay or OverlayConfig()).normalize()
         channels = list(self.channels or [])
@@ -358,6 +386,7 @@ class AppConfig:
             "exclusive": self.exclusive,
             "restore_previous": self.restore_previous,
             "ignore_ime": self.ignore_ime,
+            "smooth_window": self.smooth_window,
             "appearance": self.appearance.to_dict(),
             "overlay": self.overlay.to_dict(),
             "channels": [channel.to_dict() for channel in self.channels],
@@ -376,6 +405,7 @@ class AppConfig:
         item.exclusive = data.get("exclusive", item.exclusive)
         item.restore_previous = data.get("restore_previous", item.restore_previous)
         item.ignore_ime = data.get("ignore_ime", item.ignore_ime)
+        item.smooth_window = data.get("smooth_window", item.smooth_window)
         item.appearance = AppearanceConfig.from_dict(data.get("appearance"))
         item.overlay = OverlayConfig.from_dict(data.get("overlay"))
         item.geometry = data.get("geometry", item.geometry)
@@ -437,7 +467,7 @@ def save_config(cfg: AppConfig, path: Optional[str] = None) -> str:
             os.unlink(handle.name)
         except OSError:
             pass
-        raise ConfigError(tr("无法写入配置文件：%s") % exc) from exc
+        raise ConfigError(tr("cannot_write_config_file") % exc) from exc
     return target
 
 
@@ -450,11 +480,11 @@ def import_config(source: str) -> AppConfig:
         with open(source, "r", encoding="utf-8") as handle:
             raw = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
-        raise ConfigError(tr("配置文件无法解析：%s") % exc) from exc
+        raise ConfigError(tr("cannot_parse_config_file") % exc) from exc
     if not isinstance(raw, dict):
-        raise ConfigError(tr("配置文件格式不正确"))
+        raise ConfigError(tr("invalid_config_file_format"))
     if "channels" not in raw and "panels" not in raw:
-        raise ConfigError(tr("这不是本程序的配置文件"))
+        raise ConfigError(tr("this_is_not_a_vexrush_config_file"))
     return AppConfig.from_dict(raw)
 
 
@@ -470,6 +500,7 @@ def copy_into(dst: AppConfig, src: AppConfig) -> AppConfig:
     dst.exclusive = src.exclusive
     dst.restore_previous = src.restore_previous
     dst.ignore_ime = src.ignore_ime
+    dst.smooth_window = src.smooth_window
     dst.geometry = src.geometry
     dst.expanded = [list(pair) for pair in src.expanded]
 

@@ -25,12 +25,15 @@ class SectionDialog(QDialog):
         self._loading = True
         self._anchors = {}
         self._grids = []
+        self._hints = []
         self._fitted = False
         self.commit_kind = "all"
         self.setWindowTitle(title)
         self.setMinimumSize(width, height)
         self.resize(width + 20, height + 80)
         self.setModal(False)
+        # 标题栏上那个「?」没人用，去掉它，换成设置窗自己的按钮
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -43,12 +46,13 @@ class SectionDialog(QDialog):
         head_layout.setSpacing(8)
         head_layout.addWidget(w.label(title, "PageTitle"))
         head_layout.addStretch(1)
+        self._head_layout = head_layout
         root.addWidget(head)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._scroll = scroll
         body = QWidget(scroll)
         self.body_layout = QVBoxLayout(body)
@@ -61,14 +65,17 @@ class SectionDialog(QDialog):
         footer.setObjectName("Footer")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(20, 10, 20, 10)
-        footer_layout.addWidget(w.label(tr("改动会立刻保存"), "Caption"))
+        footer_layout.addWidget(w.label(tr("changes_are_saved_right_away"), "Caption"))
         footer_layout.addStretch(1)
-        done = QPushButton(tr("完成"), footer)
+        done = QPushButton(tr("done"), footer)
         done.setProperty("variant", "primary")
         done.setCursor(Qt.PointingHandCursor)
         done.clicked.connect(self.close)
         footer_layout.addWidget(done)
         root.addWidget(footer)
+
+        # 改外观要重新生成整张样式表，会有 100ms 左右的停顿，这里盖一层转圈
+        self._busy = w.BusyOverlay(self)
 
     # ------------------------------------------------------------ 排版工具
     def _section(self, title: str, key: str = "") -> QVBoxLayout:
@@ -124,7 +131,19 @@ class SectionDialog(QDialog):
         hint.setMinimumWidth(0)
         hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         hint.setParent(parent)
+        self._hints.append(hint)
         return hint
+
+    def _fit_hints(self) -> None:
+        """QGridLayout 不认 heightForWidth，换行后的第二行会被切掉——这里自己算高度。"""
+        if not self._hints:
+            return
+        viewport = self._scroll.viewport().width()
+        width = max(140, viewport - LABEL_W - 18)
+        for hint in self._hints:
+            metrics = hint.fontMetrics()
+            rect = metrics.boundingRect(0, 0, width, 10000, Qt.TextWordWrap, hint.text())
+            hint.setMinimumHeight(max(metrics.height() + 2, rect.height() + 2))
 
     def _name_cell(self, text: str, parent: QWidget) -> QLabel:
         name = w.label(text, "FieldLabel")
@@ -147,8 +166,8 @@ class SectionDialog(QDialog):
         grid.addWidget(self._name_cell(text, row), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
         self._add_control(grid, control, 0)
         if hint:
-            grid.addWidget(self._hint_label(hint, row), 0, 2, Qt.AlignRight | Qt.AlignVCenter)
-            grid.setColumnStretch(2, 0)
+            label = self._hint_label(hint, row)
+            grid.addWidget(label, 1, 0, 1, 3, Qt.AlignTop)
         row.setLayout(grid)
         layout.addWidget(row)
         return row
@@ -158,7 +177,8 @@ class SectionDialog(QDialog):
         grid = self._grid()
         grid.addWidget(self._name_cell(text, row), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
         if hint:
-            grid.addWidget(self._hint_label(hint, row), 0, 1, Qt.AlignLeft | Qt.AlignVCenter)
+            label = self._hint_label(hint, row)
+            grid.addWidget(label, 1, 0, 1, 3, Qt.AlignTop)
         switch = w.Switch(parent=row)
         grid.addWidget(switch, 0, 2, Qt.AlignRight | Qt.AlignVCenter)
         row.setLayout(grid)
@@ -203,6 +223,31 @@ class SectionDialog(QDialog):
             return text
         return text[:18] + " … " + text[-24:]
 
+    def add_header_button(self, text: str, slot, variant: str = "ghost") -> QPushButton:
+        """标题右侧放一个文字按钮（比如「GitHub 仓库」）。"""
+        button = QPushButton(text, self)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setProperty("variant", variant)
+        button.clicked.connect(slot)
+        self._head_layout.addWidget(button)
+        return button
+
+    # ------------------------------------------------------------ 忙碌态
+    def show_busy(self, text: str = "") -> None:
+        self._busy.setGeometry(self.rect())
+        self._busy.raise_()
+        self._busy.show_busy(text)
+
+    def hide_busy(self) -> None:
+        self._busy.hide_busy()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_hints()
+        if getattr(self, "_busy", None) is not None:
+            self._busy.setGeometry(self.rect())
+            self._busy.raise_()
+
     # ------------------------------------------------------------ 对外
     def focus_section(self, key: str) -> None:
         anchor = self._anchors.get(key)
@@ -216,4 +261,5 @@ class SectionDialog(QDialog):
         self.sync_from_config()
         if not self._fitted:
             self._fit_label_column()
+        self._fit_hints()
         super().showEvent(event)

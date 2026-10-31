@@ -32,13 +32,15 @@ from app import config as cfg_mod          # noqa: E402
 
 TARGET_PY = os.path.join(HERE, "target_app.py")
 MAIN_PY = os.path.join(ROOT, "main.py")
-CONFIG = os.path.join(ROOT, "config.json")
+TEST_APPDATA = os.path.join(ROOT, "__appdata_e2e")
+CONFIG = os.path.join(TEST_APPDATA, "VexRush", "config.json")
 BACKUP = os.path.join(HERE, "_config_backup.json")
 STATE = os.path.join(HERE, "_target_state.txt")
 HWND_FILE = os.path.join(HERE, "_target_hwnd.txt")
 TARGET_CLASS = "DualClickTargetV2"
 
 VK_F19 = 0x82
+VK_X = 0x58
 
 RESULTS = []
 
@@ -196,7 +198,7 @@ def write_test_config():
     left.trigger_key = "f19"
     left.trigger_mouse = "left"
     left.sim_mouse = "left"
-    left.hotkey = "f3"
+    left.hotkey = "x"          # 用户报过：热键设成字母就不生效
 
     right = cfg.channels[1]
     right.enabled = True
@@ -215,6 +217,16 @@ def restore_config():
         with open(BACKUP, "rb") as src, open(CONFIG, "wb") as dst:
             dst.write(src.read())
         os.remove(BACKUP)
+
+
+def saved_enabled(index: int):
+    """读程序刚写回的配置里某一路的开关状态。"""
+    try:
+        with open(CONFIG, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return bool(data["channels"][index]["enabled"])
+    except Exception:
+        return None
 
 
 def read_counts_settled(gap: float = 0.22, tries: int = 8):
@@ -257,7 +269,10 @@ def read_int_file(path):
 
 
 def launch_app():
-    proc = subprocess.Popen([sys.executable, MAIN_PY, "--multi"], cwd=ROOT)
+    env = dict(os.environ)
+    env["APPDATA"] = TEST_APPDATA
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    proc = subprocess.Popen([sys.executable, MAIN_PY, "--multi"], cwd=ROOT, env=env)
     hwnd = wait_for(lambda: (find_by_pid(proc.pid) or [0])[0], 20.0)
     return proc, int(hwnd or 0)
 
@@ -306,6 +321,23 @@ def main():
         time.sleep(0.5)
         check("松手后立即停止", read_counts()["down"] - first["down"] == 0,
               "又多了 %d 次" % (read_counts()["down"] - first["down"]))
+
+        # ---- B2. 字母热键（用户复现：热键设成 x 时按了没反应）
+        before = saved_enabled(0)
+        key_event(VK_X, True)
+        time.sleep(0.06)
+        key_event(VK_X, False)
+        time.sleep(1.0)
+        after = saved_enabled(0)
+        check("字母热键 x 能切换这一路", after is not None and after != before,
+              "%s -> %s" % (before, after))
+        # 再按一次切回开启，后面的用例还要用它
+        key_event(VK_X, True)
+        time.sleep(0.06)
+        key_event(VK_X, False)
+        time.sleep(1.0)
+        restored = saved_enabled(0)
+        check("再按一次 x 能切回来", restored == before, str(restored))
 
         # ---- C. 真实右键 → 右键连点
         left_before = read_counts_settled()

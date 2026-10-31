@@ -10,9 +10,10 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QColorDialog
 from PyQt5.QtWidgets import (QAbstractButton, QButtonGroup, QFileDialog, QHBoxLayout, QMessageBox,
-                             QPushButton, QWidget)
+                             QPushButton, QVBoxLayout, QWidget)
 
 from . import config as cfg_mod
+from . import i18n as i18n_mod
 from . import fonts as fonts_mod
 from . import theme as theme_mod
 from . import widgets as w
@@ -54,8 +55,9 @@ class SettingsDialog(SectionDialog):
     requestOverlay = pyqtSignal()      # 打开「悬浮显示设置」
 
     def __init__(self, app_cfg: AppConfig, parent: QWidget = None) -> None:
-        super().__init__(tr("设置"), 600, 540, parent)
+        super().__init__(tr("settings"), 640, 560, parent)
         self.cfg = app_cfg
+        self.add_header_button(tr("github_repo"), self._open_repo)
         self._build_appearance()
         self._build_general()
         self._build_config()
@@ -65,12 +67,12 @@ class SettingsDialog(SectionDialog):
 
     # ------------------------------------------------------------ 外观
     def _build_appearance(self) -> None:
-        box = self._section(tr("外观"), "appearance")
+        box = self._section(tr("appearance"), "appearance")
 
         theme_options = [(key, tr(value["label"])) for key, value in theme_mod.THEMES.items()]
         self.seg_theme = w.Segmented(theme_options, self.cfg.appearance.theme, self)
         self.seg_theme.changed.connect(self._on_theme)
-        self._row(box, tr("主题"), self.seg_theme)
+        self._row(box, tr("theme"), self.seg_theme)
 
         accent_row = QWidget(self)
         accent_layout = QHBoxLayout(accent_row)
@@ -85,27 +87,29 @@ class SettingsDialog(SectionDialog):
             self._accent_swatches[key] = swatch
             accent_layout.addWidget(swatch)
             swatch.clicked.connect(lambda _=False, k=key: self._on_accent(k))
-        self.btn_custom_accent = QPushButton(tr("自定义…"), accent_row)
+        self.btn_custom_accent = QPushButton(tr("custom_2"), accent_row)
         self.btn_custom_accent.setCursor(Qt.PointingHandCursor)
         self.btn_custom_accent.clicked.connect(self._pick_custom_accent)
         accent_layout.addWidget(self.btn_custom_accent)
         accent_layout.addStretch(1)
-        self._row(box, tr("强调色"), accent_row)
+        self._row(box, tr("accent"), accent_row)
 
         scale_options = [(key, tr(value[0])) for key, value in theme_mod.FONT_SCALES.items()]
         self.seg_scale = w.Segmented(scale_options, self.cfg.appearance.font_scale, self)
         self.seg_scale.changed.connect(self._on_font_scale)
-        self._row(box, tr("界面字号"), self.seg_scale)
+        self._row(box, tr("ui_font_size"), self.seg_scale)
 
         self.cb_font = w.Combo(self)
         self.cb_font.add_items(self._font_items(), self.cfg.appearance.font_family)
         self.cb_font.currentIndexChanged.connect(self._on_font)
-        self._row(box, tr("界面字体"), self.cb_font)
+        self._row(box, tr("font"), self.cb_font)
 
-        lang_options = [(key, value) for key, value in cfg_mod.LANGUAGES.items()]
+        lang_options = []
+        for code, label, official in i18n_mod.available():
+            lang_options.append((code, label if official else "%s · %s" % (label, tr("unofficial"))))
         self.seg_lang = w.Segmented(lang_options, self.cfg.appearance.language, self)
         self.seg_lang.changed.connect(self._on_language)
-        self._row(box, tr("界面语言"), self.seg_lang)
+        self._row(box, tr("language"), self.seg_lang)
 
     def _font_items(self):
         items = [(fonts_mod.BUILTIN_KEY, fonts_mod.display_name(fonts_mod.BUILTIN_KEY))]
@@ -115,7 +119,7 @@ class SettingsDialog(SectionDialog):
 
     def _pick_custom_accent(self) -> None:
         color = QColorDialog.getColor(QColor(self.cfg.appearance.custom_accent), self,
-                                      tr("自定义强调色"))
+                                      tr("custom_accent_color"))
         if not color.isValid():
             return
         self.cfg.appearance.custom_accent = color.name()
@@ -150,35 +154,38 @@ class SettingsDialog(SectionDialog):
 
     # ------------------------------------------------------------ 使用
     def _build_general(self) -> None:
-        box = self._section(tr("目标程序"), "general")
+        box = self._section(tr("target_app"), "general")
 
-        self.sw_auto = self._switch_row(box, tr("自动识别"), tr("优先选择前台窗口里的 java.exe / javaw.exe"))
+        self.sw_auto = self._switch_row(box, tr("auto_detect"), tr("prefers_java_exe_javaw_exe_in_the_foregr"))
         self.sw_auto.toggled.connect(self._on_auto)
 
         self.cb_mode = w.Combo(self)
-        self.cb_mode.add_items((("post", tr("后台消息 PostMessage")), ("send", tr("同步消息 SendMessage"))),
+        self.cb_mode.add_items((("post", tr("postmessage_background")), ("send", tr("sendmessage_sync"))),
                                self.cfg.send_mode)
         self.cb_mode.currentIndexChanged.connect(self._on_mode)
-        self._row(box, tr("发送方式"), self.cb_mode)
+        self._row(box, tr("send_mode"), self.cb_mode)
 
-        box = self._section(tr("防卡手"), "exclusive")
-        self.sw_exclusive = self._switch_row(box, tr("只允许开一路"),
-                                            tr("开启一路时自动关掉另一路，避免两路同时猛点"))
+        box = self._section(tr("exclusive_mode"), "exclusive")
+        self.sw_exclusive = self._switch_row(box, tr("only_one_channel"),
+                                            tr("turning_one_channel_on_turns_the_other_o"))
         self.sw_exclusive.toggled.connect(self._on_exclusive)
-        self.sw_restore = self._switch_row(box, tr("关闭后恢复"), tr("关掉当前这路时，把刚才被挤掉的那路重新打开"))
+        self.sw_restore = self._switch_row(box, tr("restore_previous"), tr("turning_this_channel_off_re_enables_the"))
         self.sw_restore.toggled.connect(self._on_restore)
 
-        box = self._section(tr("输入法"), "ime")
-        self.sw_ime = self._switch_row(box, tr("打字时不响应"),
-                                       tr("光标在文字输入框里（或输入法正在拼字）时，热键、鼠标和键盘触发都不生效"))
+        self.sw_smooth = self._switch_row(box, tr("smooth_window"), tr("smooth_window_hint"))
+        self.sw_smooth.toggled.connect(self._on_smooth)
+
+        box = self._section(tr("ime"), "ime")
+        self.sw_ime = self._switch_row(box, tr("ignore_while_typing"),
+                                       tr("while_the_caret_is_in_a_text_field_or_th"))
         self.sw_ime.toggled.connect(self._on_ime)
 
-        box = self._section(tr("悬浮显示"), "overlay")
+        box = self._section(tr("hud"), "overlay")
         row = QWidget(self)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        open_button = QPushButton(tr("打开悬浮显示设置…"), row)
+        open_button = QPushButton(tr("open_hud_settings"), row)
         open_button.setCursor(Qt.PointingHandCursor)
         open_button.clicked.connect(self.requestOverlay.emit)
         layout.addWidget(open_button)
@@ -209,6 +216,12 @@ class SettingsDialog(SectionDialog):
         self.cfg.restore_previous = bool(checked)
         self._commit("general")
 
+    def _on_smooth(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self.cfg.smooth_window = bool(checked)
+        self._commit("general")
+
     def _on_ime(self, checked: bool) -> None:
         if self._loading:
             return
@@ -217,52 +230,63 @@ class SettingsDialog(SectionDialog):
 
     # ------------------------------------------------------------ 配置文件
     def _build_config(self) -> None:
-        box = self._section(tr("配置文件"), "config")
+        box = self._section(tr("config_file"), "config")
         path = cfg_mod.config_path()
         path_label = w.label(self._elide(path, 52), "Caption")
         path_label.setToolTip(path)
         path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._row(box, tr("保存位置"), path_label)
+        self._row(box, tr("location"), path_label)
 
         buttons = QWidget(self)
-        buttons_layout = QHBoxLayout(buttons)
+        buttons_layout = QVBoxLayout(buttons)
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(8)
-        for text, slot in ((tr("打开数据目录"), self._open_data_dir),
-                           (tr("导入配置…"), self._import_config),
-                           (tr("导出配置…"), self._export_config),
-                           (tr("恢复默认"), self._reset_all)):
-            button = QPushButton(text, buttons)
-            button.setCursor(Qt.PointingHandCursor)
-            button.clicked.connect(slot)
-            buttons_layout.addWidget(button)
-        buttons_layout.addStretch(1)
+        # 分两行摆，英文下也不会把窗口顶宽
+        for group in (((tr("open_data_folder"), self._open_data_dir),),
+                      ((tr("import_config_2"), self._import_config),
+                       (tr("export_config_2"), self._export_config),
+                       (tr("reset_to_defaults"), self._reset_all))):
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(8)
+            for text, slot in group:
+                button = QPushButton(text, buttons)
+                button.setCursor(Qt.PointingHandCursor)
+                button.clicked.connect(slot)
+                line.addWidget(button)
+            line.addStretch(1)
+            buttons_layout.addLayout(line)
         self._row(box, "", buttons)
+
+    def _open_repo(self) -> None:
+        import webbrowser
+
+        webbrowser.open(cfg_mod.GITHUB_URL)
 
     def _open_data_dir(self) -> None:
         try:
             os.startfile(cfg_mod.app_dir())
         except OSError:
-            QMessageBox.warning(self, tr("打开失败"), cfg_mod.app_dir())
+            QMessageBox.warning(self, tr("could_not_open"), cfg_mod.app_dir())
 
     def _import_config(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, tr("导入配置"), os.path.expanduser("~"),
-                                              tr("配置文件 (*.json);;所有文件 (*.*)"))
+        path, _ = QFileDialog.getOpenFileName(self, tr("import_config"), os.path.expanduser("~"),
+                                              tr("config_files_json_all_files"))
         if not path:
             return
         try:
             loaded = cfg_mod.import_config(path)
         except cfg_mod.ConfigError as exc:
-            QMessageBox.warning(self, tr("导入失败"), str(exc))
+            QMessageBox.warning(self, tr("import_failed"), str(exc))
             return
         cfg_mod.copy_into(self.cfg, loaded)
         self.sync_from_config()
         self._commit("all")
 
     def _export_config(self) -> None:
-        default = os.path.join(os.path.expanduser("~"), tr("连点器配置.json"))
-        path, _ = QFileDialog.getSaveFileName(self, tr("导出配置"), default,
-                                              tr("配置文件 (*.json);;所有文件 (*.*)"))
+        default = os.path.join(os.path.expanduser("~"), tr("clicker_config_json"))
+        path, _ = QFileDialog.getSaveFileName(self, tr("export_config"), default,
+                                              tr("config_files_json_all_files"))
         if not path:
             return
         if not path.lower().endswith(".json"):
@@ -270,12 +294,12 @@ class SettingsDialog(SectionDialog):
         try:
             cfg_mod.export_config(self.cfg, path)
         except cfg_mod.ConfigError as exc:
-            QMessageBox.warning(self, tr("导出失败"), str(exc))
+            QMessageBox.warning(self, tr("export_failed"), str(exc))
             return
-        QMessageBox.information(self, tr("已导出"), tr("配置已保存到：\n%s") % path)
+        QMessageBox.information(self, tr("export_complete"), tr("config_saved_to") % path)
 
     def _reset_all(self) -> None:
-        answer = QMessageBox.question(self, tr("恢复默认"), tr("要把所有设置恢复成默认值吗？"),
+        answer = QMessageBox.question(self, tr("reset_to_defaults"), tr("reset_all_settings_to_their_defaults"),
                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
@@ -291,7 +315,7 @@ class SettingsDialog(SectionDialog):
             swatch.setChecked(key == self.cfg.appearance.accent)
         custom = self.cfg.appearance.accent == "custom"
         self.btn_custom_accent.setText(self.cfg.appearance.custom_accent.upper() if custom
-                                       else tr("自定义…"))
+                                       else tr("custom_2"))
         self.btn_custom_accent.setProperty("variant", "primary" if custom else "")
         self.btn_custom_accent.style().unpolish(self.btn_custom_accent)
         self.btn_custom_accent.style().polish(self.btn_custom_accent)
@@ -307,6 +331,7 @@ class SettingsDialog(SectionDialog):
             self.sw_exclusive.setChecked(self.cfg.exclusive)
             self.sw_restore.setChecked(self.cfg.restore_previous)
             self.sw_ime.setChecked(self.cfg.ignore_ime)
+            self.sw_smooth.setChecked(self.cfg.smooth_window)
             self.cb_font.select_data(self.cfg.appearance.font_family)
             self.seg_lang.set_value(self.cfg.appearance.language)
         finally:

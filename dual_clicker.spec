@@ -10,6 +10,7 @@ a = Analysis(
     datas=[
         ('assets/fonts/ChillRoundM.otf', 'assets/fonts'),
         ('assets/fonts/LICENSE-ChillRound.txt', 'assets/fonts'),
+        ('assets/lang', 'assets/lang'),
     ],
     hiddenimports=[
         'pynput.keyboard._win32',

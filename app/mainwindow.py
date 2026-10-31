@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+import ctypes.wintypes
+import math
 import time
 from typing import List, Optional
 
-from PyQt5.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation, pyqtSignal
+from PyQt5.QtCore import QEasingCurve, QRect, Qt, QTimer, QVariantAnimation, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QShowEvent
 from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLineEdit, QMainWindow,
                              QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
@@ -13,10 +16,16 @@ from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLineEdit, QMain
 from . import config as cfg_mod
 from . import engine, fonts as fonts_mod, i18n as i18n_mod, theme as theme_mod, widgets as w, winapi
 from .config import AppConfig, ChannelConfig
+from .dialogbase import SectionDialog
 from .overlay import OverlayWindow
 from .overlay_settings import OverlaySettingsDialog
 from .settings import SettingsDialog
 from .i18n import tr
+
+WM_SIZING = 0x0214
+WM_MOVING = 0x0216
+WM_EXITSIZEMOVE = 0x0232
+EASE_RATE = 26.0
 
 SAVE_DELAY_MS = 400
 TICK_MS = 110
@@ -54,7 +63,7 @@ class ChannelCard(w.Card):
 
         interval_row = QHBoxLayout()
         interval_row.setSpacing(8)
-        interval_row.addWidget(w.label(tr("间隔"), "FieldLabel"))
+        interval_row.addWidget(w.label(tr("interval"), "FieldLabel"))
         self.field = w.NumberField(int(self.cfg.interval_ms), cfg_mod.INTERVAL_MIN,
                                    cfg_mod.INTERVAL_MAX, 1, "ms", self)
         interval_row.addWidget(self.field)
@@ -65,10 +74,10 @@ class ChannelCard(w.Card):
 
         trigger_row = QHBoxLayout()
         trigger_row.setSpacing(8)
-        trigger_row.addWidget(w.label(tr("触发"), "FieldLabel"))
+        trigger_row.addWidget(w.label(tr("trigger"), "FieldLabel"))
         self.cb_trigger = w.Combo(self)
         items = [("m:" + key, tr(text)) for key, text in cfg_mod.MOUSE_BUTTONS]
-        items.append(("key", tr("自定义键盘键")))
+        items.append(("key", tr("custom_key")))
         self.cb_trigger.add_items(items, "key" if self.cfg.trigger_kind == "key"
                                   else "m:" + self.cfg.trigger_mouse)
         trigger_row.addWidget(self.cb_trigger, 1)
@@ -77,10 +86,10 @@ class ChannelCard(w.Card):
         trigger_row.addWidget(self.btn_trigger_key)
         root.addLayout(trigger_row)
 
-        self.advanced, adv_body = self._collapsible(tr("高级"))
+        self.advanced, adv_body = self._collapsible(tr("advanced"))
         name_row = QHBoxLayout()
         name_row.setSpacing(8)
-        name_row.addWidget(w.label(tr("名称"), "FieldLabel"))
+        name_row.addWidget(w.label(tr("name"), "FieldLabel"))
         self.ed_name = QLineEdit(self.cfg.name or "", self)
         self.ed_name.setMaxLength(8)
         self.ed_name.setPlaceholderText(self._default_name())
@@ -89,7 +98,7 @@ class ChannelCard(w.Card):
 
         sim_row = QHBoxLayout()
         sim_row.setSpacing(8)
-        sim_row.addWidget(w.label(tr("模拟点击"), "FieldLabel"))
+        sim_row.addWidget(w.label(tr("simulate"), "FieldLabel"))
         self.cb_sim = w.Combo(self)
         self.cb_sim.add_items([(key, tr(text)) for key, text in cfg_mod.MOUSE_BUTTONS],
                               self.cfg.sim_mouse)
@@ -98,7 +107,7 @@ class ChannelCard(w.Card):
 
         hot_row = QHBoxLayout()
         hot_row.setSpacing(8)
-        hot_row.addWidget(w.label(tr("开关热键"), "FieldLabel"))
+        hot_row.addWidget(w.label(tr("toggle_hotkey"), "FieldLabel"))
         self.btn_hotkey = w.KeyButton(self.cfg.hotkey or "", self)
         self.btn_hotkey.setFixedWidth(96)
         hot_row.addWidget(self.btn_hotkey)
@@ -106,13 +115,13 @@ class ChannelCard(w.Card):
         adv_body.addLayout(hot_row)
         root.addWidget(self.advanced)
 
-        self.stats, stat_body = self._collapsible(tr("速率"))
+        self.stats, stat_body = self._collapsible(tr("rate"))
         self.spark = w.Sparkline(parent=self)
         stat_body.addWidget(self.spark)
         stat_row = QHBoxLayout()
         stat_row.setSpacing(8)
-        self.lbl_count = w.label(tr("已连点 0 次"), "Caption")
-        self.lbl_live = w.label(tr("0.0 次/秒"), "Caption")
+        self.lbl_count = w.label(tr("clicked_0_times"), "Caption")
+        self.lbl_live = w.label(tr("0_0_clicks_s"), "Caption")
         stat_row.addWidget(self.lbl_count)
         stat_row.addStretch(1)
         stat_row.addWidget(self.lbl_live)
@@ -131,7 +140,7 @@ class ChannelCard(w.Card):
         self.sync_from_config()
 
     def _default_name(self) -> str:
-        return tr("连点%d") % (self.index + 1)
+        return tr("click") % (self.index + 1)
 
     # ------------------------------------------------------------- 结构
     def _collapsible(self, title: str):
@@ -182,7 +191,7 @@ class ChannelCard(w.Card):
 
     def _update_rate_hint(self) -> None:
         interval = max(1, int(self.cfg.interval_ms))
-        self.lbl_rate_hint.setText(tr("≈ %s 次/秒") % _fmt(1000.0 / interval, 1))
+        self.lbl_rate_hint.setText(tr("clicks_s") % _fmt(1000.0 / interval, 1))
 
     # ------------------------------------------------------------- 回调
     def _on_enabled(self, checked: bool) -> None:
@@ -227,7 +236,8 @@ class ChannelCard(w.Card):
         self._emit()
 
     def _on_hotkey(self, name: str) -> None:
-        self.cfg.hotkey = name
+        self.cfg.hotkey = winapi.canon_key(name)
+        self.btn_hotkey.set_key(self.cfg.hotkey)
         self._emit()
 
     def _emit(self) -> None:
@@ -240,8 +250,8 @@ class ChannelCard(w.Card):
         cps = self.channel.sample_cps()
         ceiling = max(10.0, 1000.0 / max(1, int(self.cfg.interval_ms)) * 1.15)
         self.spark.push(cps, ceiling)
-        self.lbl_count.setText(tr("已连点 %s 次") % _fmt(self.channel.clicks, 0))
-        self.lbl_live.setText(tr("%s 次/秒") % _fmt(cps, 1))
+        self.lbl_count.setText(tr("clicked_times") % _fmt(self.channel.clicks, 0))
+        self.lbl_live.setText(tr("clicks_s_2") % _fmt(cps, 1))
         if self.channel.is_clicking():
             self.dot.set_color(w.color("accent"))
         elif self.cfg.enabled:
@@ -321,12 +331,12 @@ class MainWindow(QMainWindow):
         header.setSpacing(6)
         header.addWidget(w.label(cfg_mod.APP_NAME, "PageTitle"), 0, Qt.AlignVCenter)
         header.addStretch(1)
-        self.btn_overlay = QPushButton(tr("连点显示"), central)
+        self.btn_overlay = QPushButton(tr("click_hud"), central)
         self.btn_overlay.setProperty("variant", "ghost")
         self.btn_overlay.setCheckable(True)
         self.btn_overlay.setCursor(Qt.PointingHandCursor)
         self.btn_overlay.toggled.connect(self._toggle_overlay)
-        self.btn_settings = QPushButton(tr("设置"), central)
+        self.btn_settings = QPushButton(tr("settings"), central)
         self.btn_settings.setProperty("variant", "ghost")
         self.btn_settings.setCursor(Qt.PointingHandCursor)
         self.btn_settings.clicked.connect(self._open_settings)
@@ -339,7 +349,7 @@ class MainWindow(QMainWindow):
         bar_layout = QHBoxLayout(bar)
         bar_layout.setContentsMargins(12, 7, 12, 7)
         bar_layout.setSpacing(8)
-        bar_layout.addWidget(w.label(tr("目标程序"), "FieldLabel"))
+        bar_layout.addWidget(w.label(tr("target_app"), "FieldLabel"))
         self.cb_target = w.Combo(bar)
         self.cb_target.setEditable(True)
         self.cb_target.setMinimumWidth(180)
@@ -348,7 +358,7 @@ class MainWindow(QMainWindow):
             self.cb_target.lineEdit().editingFinished.connect(self._on_target_typed)
         self.cb_target.activated.connect(self._on_target_pick)
         bar_layout.addWidget(self.cb_target, 1)
-        self.btn_refresh = QPushButton(tr("刷新"), bar)
+        self.btn_refresh = QPushButton(tr("refresh"), bar)
         self.btn_refresh.setProperty("variant", "ghost")
         self.btn_refresh.setCursor(Qt.PointingHandCursor)
         self.btn_refresh.clicked.connect(lambda: self._refresh_targets(self.cfg.target_process))
@@ -441,10 +451,10 @@ class MainWindow(QMainWindow):
         except cfg_mod.ConfigError as exc:
             self.lbl_saved.setText(str(exc))
             return
-        self.lbl_saved.setText(tr("已保存 %s") % time.strftime("%H:%M:%S"))
+        self.lbl_saved.setText(tr("saved") % time.strftime("%H:%M:%S"))
 
     def _refresh_status(self) -> None:
-        self.lbl_saved.setText(tr("配置自动保存"))
+        self.lbl_saved.setText(tr("config_auto_saves"))
         self.lbl_saved.setToolTip(cfg_mod.config_path())
 
     # ------------------------------------------------------------- 目标
@@ -491,7 +501,7 @@ class MainWindow(QMainWindow):
             self.lbl_target.setText(_shorten(text, 26))
             self.lbl_target.setToolTip("%s\nhwnd=%s" % (text, hwnd))
         else:
-            self.lbl_target.setText(tr("未找到窗口"))
+            self.lbl_target.setText(tr("no_window_found"))
             self.lbl_target.setToolTip("")
 
     # ------------------------------------------------------------- 悬浮显示
@@ -518,7 +528,7 @@ class MainWindow(QMainWindow):
         if self._overlay_settings is None:
             dialog = OverlaySettingsDialog(self.cfg, self)
             dialog.changed.connect(self._on_settings_changed)
-            dialog.requestPreview.connect(self._preview_overlay)
+            dialog.requestPreview.connect(self._replay_overlay)
             self._overlay_settings = dialog
         dialog = self._overlay_settings
         dialog.sync_from_config()
@@ -527,15 +537,16 @@ class MainWindow(QMainWindow):
         dialog.activateWindow()
         return dialog
 
-    def _preview_overlay(self) -> None:
-        """预览一下：临时把悬浮显示亮出来，3 秒后恢复原状态。"""
-        was_enabled = bool(self.cfg.overlay.enabled)
-        if not was_enabled:
-            self.overlay.set_cfg(self.cfg.overlay)
-            self.overlay.restore_position()
-            self.overlay.show()
-            self.overlay.flash(0)
-            QTimer.singleShot(3000, self._end_preview)
+    def _replay_overlay(self) -> None:
+        """试播一次入场动画：悬浮窗没开就先临时亮出来，3 秒后收回去。"""
+        overlay = self.overlay
+        overlay.set_cfg(self.cfg.overlay)
+        if not overlay.isVisible():
+            overlay.restore_position()
+            overlay.show()
+            QTimer.singleShot(3200, self._end_preview)
+        overlay.flash(0)
+        overlay.play_in()
 
     def _end_preview(self) -> None:
         if not self.cfg.overlay.enabled:
@@ -661,13 +672,14 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- 交互
     def _on_hotkey(self, name: str) -> None:
+        pressed = winapi.canon_key(name)
         for card in self._card_widgets:
-            if card.cfg.hotkey and card.cfg.hotkey == name:
+            if card.cfg.hotkey and winapi.canon_key(card.cfg.hotkey) == pressed:
                 card.switch.setChecked(not card.switch.isChecked())
                 self.overlay.flash(card.index)
 
     def _on_input_failed(self, message: str) -> None:
-        self.lbl_target.setText(tr("输入监听不可用"))
+        self.lbl_target.setText(tr("input_hook_unavailable"))
         self.lbl_target.setToolTip(message)
 
     def _on_card_expanded(self, index: int, delta: int = 0) -> None:
@@ -681,12 +693,29 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(280, lambda: self._fit_height(allow_shrink=True))   # 动画后精修一次
 
     def _apply_theme_with_busy(self) -> None:
-        """换主题要重建整套样式表（实测 90~140ms），先用遮罩挡住再干活。"""
-        self._busy.show_busy(tr("正在应用外观…"))
+        """换主题要重建整套样式表（实测 90~140ms），先用遮罩挡住再干活。
+
+        用户是在设置窗里点外观，主窗口多半被设置窗盖着——遮罩要盖在设置窗上才有用。
+        """
+        source = self.sender()
+        target = source if isinstance(source, SectionDialog) else None
+        self._busy_target = target
+        if target is not None:
+            target.show_busy(tr("applying_appearance"))
+        else:
+            self._busy.show_busy(tr("applying_appearance"))
         QTimer.singleShot(60, self._apply_theme_now)
 
     def _apply_theme_now(self) -> None:
         self.apply_theme()
+        target = getattr(self, "_busy_target", None)
+        self._busy_target = None
+        if target is not None:
+            try:
+                target.hide_busy()
+            except RuntimeError:
+                pass
+            return
         self._sync_busy_geometry()
         self._busy.hide_busy()
 
@@ -744,8 +773,15 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._sync_busy_geometry()
-        if getattr(self, "_width_guard", False):
+        if getattr(self, "_easing", False) or getattr(self, "_width_guard", False):
             return
+        # 用户手动改窗口大小后，若卡片被挤掉就重新贴合高度（#5）
+        if getattr(self, "_fit_timer", None) is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self._fit_height(allow_shrink=False, animate=True))
+            self._fit_timer = timer
+        self._fit_timer.start(240)
         need = self._min_width_for_cards()
         if self.width() < need and not self.isMaximized():
             guard = getattr(self, "_squeeze_timer", None)
@@ -762,6 +798,84 @@ class MainWindow(QMainWindow):
         need = self._min_width_for_cards()
         if self.width() < need:
             self._animate_width(need)
+
+    # ------------------------------------------------- 拖动/缩放时窗口缓动跟随
+    def nativeEvent(self, event_type, message):
+        """接管 WM_SIZING / WM_MOVING：先记账，再由定时器缓动靠过去。"""
+        if not getattr(self.cfg, "smooth_window", False):
+            return super().nativeEvent(event_type, message)
+        try:
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+        except Exception:
+            return super().nativeEvent(event_type, message)
+        if msg.message in (WM_SIZING, WM_MOVING):
+            try:
+                values = ctypes.cast(msg.lParam, ctypes.POINTER(ctypes.c_long * 4)).contents
+                left, top, right, bottom = (int(values[0]), int(values[1]),
+                                            int(values[2]), int(values[3]))
+            except Exception:
+                return super().nativeEvent(event_type, message)
+            self._ease_to(QRect(left, top, max(320, right - left), max(200, bottom - top)))
+            return True, 1                      # 拦下系统默认的瞬间贴合
+        if msg.message == WM_EXITSIZEMOVE:
+            self._ease_finish()
+        return super().nativeEvent(event_type, message)
+
+    def _ease_to(self, target: QRect) -> None:
+        self._ease_target = target
+        timer = getattr(self, "_ease_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setTimerType(Qt.PreciseTimer)
+            timer.setInterval(winapi.frame_interval_ms())
+            timer.timeout.connect(self._ease_step)
+            self._ease_timer = timer
+        if not timer.isActive():
+            self._ease_stamp = time.perf_counter()
+            timer.start()
+
+    def _ease_finish(self) -> None:
+        timer = getattr(self, "_ease_timer", None)
+        target = getattr(self, "_ease_target", None)
+        if timer is not None:
+            timer.stop()
+        if target is not None:
+            self._easing = True
+            try:
+                self.setGeometry(target)
+            finally:
+                self._easing = False
+        self._ease_target = None
+        self._fit_height(allow_shrink=False, animate=True)
+
+    def _ease_step(self) -> None:
+        target = getattr(self, "_ease_target", None)
+        timer = getattr(self, "_ease_timer", None)
+        if target is None or timer is None:
+            if timer is not None:
+                timer.stop()
+            return
+        now = time.perf_counter()
+        dt = min(0.05, max(0.001, now - getattr(self, "_ease_stamp", now)))
+        self._ease_stamp = now
+        current = self.geometry()
+        k = min(0.5, 1.0 - math.exp(-dt * EASE_RATE))
+        left = current.x() + (target.x() - current.x()) * k
+        top = current.y() + (target.y() - current.y()) * k
+        width = current.width() + (target.width() - current.width()) * k
+        height = current.height() + (target.height() - current.height()) * k
+        close = (abs(target.x() - left) < 1.0 and abs(target.y() - top) < 1.0
+                 and abs(target.width() - width) < 1.0 and abs(target.height() - height) < 1.0)
+        if close:
+            left, top, width, height = (target.x(), target.y(), target.width(), target.height())
+        self._easing = True
+        try:
+            self.setGeometry(QRect(int(round(left)), int(round(top)),
+                                   int(round(width)), int(round(height))))
+        finally:
+            self._easing = False
+        if close:
+            timer.stop()
 
     def _fit_height(self, allow_shrink: bool = False, animate: bool = True) -> None:
         """让窗口高度贴合卡片内容：挤到就长高，多出空白就收一点。"""

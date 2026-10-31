@@ -83,7 +83,7 @@ _CANON_ALIASES = {
 }
 
 _DISPLAY = {
-    "esc": "Esc", "enter": "Enter", "tab": "Tab", "space": tr("空格"), "backspace": tr("退格"),
+    "esc": "Esc", "enter": "Enter", "tab": "Tab", "space": tr("space"), "backspace": tr("backspace"),
     "delete": "Delete", "insert": "Insert", "home": "Home", "end": "End",
     "page_up": "PgUp", "page_down": "PgDn", "up": "↑", "down": "↓", "left": "←",
     "right": "→", "shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "caps_lock": "Caps",
@@ -109,7 +109,7 @@ def canon_key(name: str) -> str:
 def key_display(name: str) -> str:
     canon = canon_key(name)
     if not canon:
-        return tr("未设置")
+        return tr("not_set")
     if canon in _DISPLAY:
         return _DISPLAY[canon]
     if len(canon) == 1:
@@ -394,8 +394,39 @@ def _focused_child(hwnd) -> int:
     return int(hwnd)
 
 
+# 输入框类名里的关键字：只有这些控件上的光标才算“在输入框里”。
+# 桌面/列表视图之类偶尔会留下一个“幽灵光标”，必须排除掉，否则热键会失效。
+_TEXT_CLASS_HINTS = (
+    "edit", "richedit", "scintilla", "textbox", "textfield", "textedit", "text_area",
+    "chrome_widgetwin", "mozillawindowclass", "internet explorer_server", "windows.ui.core",
+    "qt5", "qt6", "sunawtframe", "consolewindowclass", "notepad", "sublime_text",
+    "vscode", "electron", "cef", "clion", "jetbrains", "terminal", "mintty", "windowsterminal",
+    "vkedit", "browser", "webview",
+)
+
+# 这些类名一定不是输入框（桌面、任务栏、各种列表）。
+_NOT_TEXT_CLASSES = (
+    "progman", "workerw", "shelldll_defview", "syslistview32", "directuihwnd",
+    "shell_traywnd", "shelltabwnd", "tasklistthumnail", "dv2controlhost",
+    "tooltips_class32", "msctfime ui", "ime", "default ime",
+)
+
+
+def _looks_like_text_class(class_name: str) -> bool:
+    lowered = (class_name or "").strip().lower()
+    if not lowered:
+        return False
+    for skip in _NOT_TEXT_CLASSES:
+        if skip in lowered:
+            return False
+    for hint in _TEXT_CLASS_HINTS:
+        if hint in lowered:
+            return True
+    return False
+
+
 def caret_visible() -> bool:
-    """前台窗口里是否有可见的文字光标（说明光标在输入框里，正在打字）。"""
+    """前台窗口里是否有文字光标，并且它长在输入类控件上。"""
     hwnd = foreground_window()
     if not hwnd:
         return False
@@ -408,7 +439,17 @@ def caret_visible() -> bool:
     if info is None or not info.hwndCaret:
         return False
     rc = info.rcCaret
-    return (rc.right - rc.left) > 0 and (rc.bottom - rc.top) > 0
+    if (rc.right - rc.left) <= 0 or (rc.bottom - rc.top) <= 0:
+        return False
+    owner = int(info.hwndCaret or 0)
+    focus = int(info.hwndFocus or 0)
+    if _looks_like_text_class(window_class(owner)):
+        return True
+    if focus and focus != owner and _looks_like_text_class(window_class(focus)):
+        return True
+    # 光标在自己的子窗口里、但类名认不出来时，看它的父窗口类名
+    parent = USER32.GetParent(owner) if owner else 0
+    return bool(parent) and _looks_like_text_class(window_class(parent))
 
 
 _typing_cache = {"at": 0.0, "value": False}

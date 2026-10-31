@@ -27,14 +27,21 @@ target does not have to be in the foreground.
 - **Click HUD**: frameless always-on-top panel showing state, rate, count and interval per
   channel. Smooth drag interpolation with optional inertia, enter/exit animations
   (fade / scale / slide / spring / blur / none) driven at the monitor refresh rate
-  (capped at 144 Hz), rainbow accent, click-through mode, and adjustable opacity, radius,
-  padding, gap, colours and accent source.
+  (capped at 144 Hz), rainbow accent, click-through mode, adjustable background and overall
+  opacity, radius, padding, gap, colours and accent source. The **试播动画 / Replay animation**
+  button plays the enter animation again so you can judge it without toggling the HUD.
 - **4 themes × 6 accent colours × custom accent × 4 font sizes**, with a dark title bar
   that follows the theme.
 - **Built-in rounded CJK font** (ChillRoundM, OFL 1.1) or any installed system font.
-- **Portable config**: `config.json` next to the exe (fallback `%APPDATA%\VexRush`), saved
-  automatically with a visible “saved at hh:mm:ss”, plus import / export / reset and a
-  button that opens the data folder.
+- **Data directory** (`%APPDATA%\VexRush`): `config.json` is written there automatically
+  with a visible “saved at hh:mm:ss”, plus import / export / reset and a button that opens
+  the folder. A `config.json` lying next to the exe is migrated once on first start.
+- **Translations are data, not code**: `lang\*.json` in the data directory. Drop your own
+  file in and it shows up in the language list marked *unofficial* — no rebuild needed
+  (see [Translating](#translating)).
+- **Smooth window** (optional): while you drag the title bar or the window border the window
+  eases toward the pointer instead of snapping, and the height re-fits its cards after you
+  release.
 - **Single instance**, high-DPI aware (verified at 175 %), no console window.
 
 ## Usage
@@ -56,6 +63,25 @@ Everything is saved automatically, including the window position.
 - Chromium-based apps sometimes paint their own text caret, so the typing guard may not
   detect them.
 
+## Translating
+
+Language files live in `%APPDATA%\VexRush\lang\`; `zh_cn.json`, `en_us.json` and
+`example.json` are copied there on first run. A pack is one flat JSON object:
+
+```json
+{
+  "_name": "Deutsch",
+  "interval": "Intervall",
+  "click": "Klick %d"
+}
+```
+
+- Keys are stable semantic ids — copy `example.json`, keep the keys, translate the values.
+- `_name` is what the language list shows.
+- `%d` / `%s` / `%0.1f` placeholders must stay; `%%` is a literal percent sign.
+- Missing keys fall back to the built-in `zh_cn` text, then to the key itself.
+- Files of your own are marked *unofficial* in the list; the two shipped packs are not.
+
 ## Build
 
 ```bat
@@ -70,6 +96,9 @@ Tests (Windows only — they create real windows and send real input):
 python tests\selftest.py     :: config, theme, i18n, HUD geometry, IME gate, message posting
 python tests\e2e_test.py     :: end-to-end against a throwaway target window
 python tests\exe_check.py    :: packaged exe: high DPI, config round-trip, restore
+
+All three suites point `APPDATA` at a throwaway folder, so they never touch your real
+settings.
 ```
 
 Developer helpers: `tools\preview.py` renders any screen offscreen (`--theme`, `--accent`,
@@ -91,9 +120,10 @@ app/
   settings.py            application settings window
   dialogbase.py          shared dialog scaffolding (header / scroll area / footer, grid rows)
   fonts.py               bundled font loading + system font list
-  i18n.py, i18n_en.py    translation lookup (source strings are Chinese, table is English)
+  i18n.py                JSON language packs: built-in `assets/lang` + user `lang\`
   icon.py                generated application icon
 assets/fonts/            ChillRoundM.otf + its OFL licence text
+assets/lang/             zh_cn.json, en_us.json, example.json
 tests/, tools/           test suites and developer tools
 ```
 

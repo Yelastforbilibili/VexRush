@@ -18,10 +18,10 @@ FONT_FALLBACK = "Microsoft YaHei, Segoe UI, sans-serif"
 
 # 字号档位（用户可调）。数值是 pt，Qt 会按 DPI 自动缩放。
 FONT_SCALES = {
-    "small": ("小", 0.92),
-    "normal": ("标准", 1.0),
-    "large": ("大", 1.12),
-    "xlarge": ("特大", 1.24),
+    "small": ("small", 0.92),
+    "normal": ("standard", 1.0),
+    "large": ("large", 1.12),
+    "xlarge": ("extra_large", 1.24),
 }
 
 _BASE_FONT = {
@@ -37,7 +37,7 @@ _BASE_FONT = {
 
 THEMES: Dict[str, dict] = {
     "light": {
-        "label": "浅色",
+        "label": "light",
         "dark": False,
         "canvas": "#f4f6f9",
         "surface": "#ffffff",
@@ -61,7 +61,7 @@ THEMES: Dict[str, dict] = {
         "info_bg": "#f0f9ff",
     },
     "dark": {
-        "label": "深色",
+        "label": "dark",
         "dark": True,
         "canvas": "#0f1318",
         "surface": "#161b22",
@@ -85,7 +85,7 @@ THEMES: Dict[str, dict] = {
         "info_bg": "#0f2330",
     },
     "warm": {
-        "label": "暖砂",
+        "label": "warm_sand",
         "dark": False,
         "canvas": "#f6f3ec",
         "surface": "#fffdf8",
@@ -109,7 +109,7 @@ THEMES: Dict[str, dict] = {
         "info_bg": "#eaf3f8",
     },
     "ink": {
-        "label": "墨蓝",
+        "label": "ink_blue",
         "dark": True,
         "canvas": "#0c1119",
         "surface": "#131a24",
@@ -136,12 +136,12 @@ THEMES: Dict[str, dict] = {
 
 # 强调色：浅色主题用深一档，深色主题用亮一档
 ACCENTS: Dict[str, dict] = {
-    "blue": {"label": "蓝", "light": "#2563eb", "dark": "#3b82f6", "swatch": "#2563eb"},
-    "cyan": {"label": "青", "light": "#0e7490", "dark": "#22d3ee", "swatch": "#0891b2"},
-    "green": {"label": "绿", "light": "#15803d", "dark": "#34d399", "swatch": "#16a34a"},
-    "violet": {"label": "紫", "light": "#6d28d9", "dark": "#a78bfa", "swatch": "#7c3aed"},
-    "amber": {"label": "琥珀", "light": "#b45309", "dark": "#fbbf24", "swatch": "#d97706"},
-    "rose": {"label": "玫红", "light": "#be123c", "dark": "#fb7185", "swatch": "#e11d48"},
+    "blue": {"label": "blue", "light": "#2563eb", "dark": "#3b82f6", "swatch": "#2563eb"},
+    "cyan": {"label": "cyan", "light": "#0e7490", "dark": "#22d3ee", "swatch": "#0891b2"},
+    "green": {"label": "green", "light": "#15803d", "dark": "#34d399", "swatch": "#16a34a"},
+    "violet": {"label": "violet", "light": "#6d28d9", "dark": "#a78bfa", "swatch": "#7c3aed"},
+    "amber": {"label": "amber", "light": "#b45309", "dark": "#fbbf24", "swatch": "#d97706"},
+    "rose": {"label": "rose", "light": "#be123c", "dark": "#fb7185", "swatch": "#e11d48"},
 }
 
 DEFAULT_THEME = "light"

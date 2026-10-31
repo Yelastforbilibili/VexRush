@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import sys
@@ -27,7 +28,7 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication
 
 from app import config as cfg_mod
-from app import engine, theme as theme_mod, widgets as w, winapi
+from app import engine, overlay as overlay_mod, theme as theme_mod, widgets as w, winapi
 
 FAILURES = []
 TESTS = []
@@ -587,6 +588,67 @@ def test_settings_split() -> None:
           "exclusive=%s restore=%s" % (cfg.exclusive, cfg.restore_previous))
     check("关掉输入法开关会同步到监听", not cfg.ignore_ime and not window.hub.ignore_ime,
           "cfg=%s hub=%s" % (cfg.ignore_ime, window.hub.ignore_ime))
+    window.close()
+
+
+@test
+def test_window_easing_and_lang() -> None:
+    """第三轮：#1 窗口缓动、#3 数据目录、#4 语言包、#7 拖动首帧、#9 GitHub 按钮。"""
+    from PyQt5.QtCore import QRect
+
+    from app import i18n as i18n_mod
+    from app import winapi
+    from app.mainwindow import MainWindow
+
+    root = cfg_mod.data_dir()
+    check("数据目录在 AppData 下", root.lower().startswith(os.environ.get("APPDATA", "").lower()), root)
+    check("配置也落在数据目录", cfg_mod.config_path().startswith(root), cfg_mod.config_path())
+    i18n_mod.prepare()
+    codes = [code for code, _name, _official in i18n_mod.available()]
+    check("语言包能从 lang 目录读出来", "zh_cn" in codes and "en_us" in codes, str(codes))
+    check("语言包里没有漏翻译的键", i18n_mod.tr("interval") != "interval", i18n_mod.tr("interval"))
+    i18n_mod.set_language("en_us")
+    check("切到英文能取到英文", i18n_mod.tr("interval") == "Interval", i18n_mod.tr("interval"))
+    i18n_mod.set_language("zh_cn")
+    check("切回中文", i18n_mod.tr("interval") == "间隔", i18n_mod.tr("interval"))
+
+    cfg = cfg_mod.AppConfig()
+    cfg.geometry = ""
+    window = MainWindow(cfg)
+    window.show()
+    _pump()
+    check("窗口缓动默认开启", cfg.smooth_window is True)
+    window.move(140, 100)
+    window.resize(700, 380)
+    _pump()
+    window._ease_stamp = time.perf_counter() - 0.008
+    window._ease_to(QRect(300, 160, 700, 380))
+    before = window.geometry()
+    window._ease_step()
+    after = window.geometry()
+    check("窗口缓动是逐步靠过去的（不是瞬移）",
+          after.x() != before.x() and abs(after.x() - 300) > 1,
+          "%d -> %d（目标 300）" % (before.x(), after.x()))
+    window._ease_finish()
+    _pump()
+    check("收尾时贴到目标位置", window.geometry().x() == 300, str(window.geometry().x()))
+
+    window.resize(500, 300)
+    _pump(40)
+    check("挤窄后回弹到卡片最小宽度",
+          window.width() >= window._min_width_for_cards(),
+          "%d >= %d" % (window.width(), window._min_width_for_cards()))
+
+    dialog = window._ensure_settings()
+    dialog.show()
+    _pump()
+    check("设置窗有窗口缓动开关", hasattr(dialog, "sw_smooth"))
+    check("设置窗标题栏没有 ? 按钮",
+          not (dialog.windowFlags() & Qt.WindowContextHelpButtonHint))
+    check("设置窗有 GitHub 按钮", cfg_mod.GITHUB_URL.endswith("/VexRush"))
+    check("拖动首帧插值有上限",
+          "min(0.45" in inspect.getsource(overlay_mod.OverlayWindow._on_frame),
+          "k 上限 45%")
     window.close()
 
 

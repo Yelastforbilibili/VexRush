@@ -52,6 +52,7 @@ def main(argv=None) -> int:
     from app.mainwindow import MainWindow
 
     config = cfg_mod.load_config()
+    i18n.prepare()
     i18n.set_language(config.appearance.language)
 
     app = QApplication(args)          # 必须先有 app，QFontDatabase 才能用
@@ -68,7 +69,7 @@ def main(argv=None) -> int:
         guard = _acquire_instance_lock()
         if guard is None:
             QMessageBox.information(None, cfg_mod.APP_NAME,
-                                    tr("%s 已经在运行了。") % cfg_mod.APP_NAME)
+                                    tr("is_already_running") % cfg_mod.APP_NAME)
             return 0
 
     winapi.set_app_user_model_id(cfg_mod.APP_ID)

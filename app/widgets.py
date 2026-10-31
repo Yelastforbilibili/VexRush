@@ -238,6 +238,8 @@ class Combo(QComboBox):
         super().__init__(parent)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(30)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.setMinimumWidth(150)
         view = self.view()
         if view is not None:
             view.setCursor(Qt.PointingHandCursor)
@@ -336,7 +338,7 @@ class Segmented(QWidget):
 class ToggleHeader(QAbstractButton):
     """「更多设置 ⌄」文字按钮，展开时箭头翻转。"""
 
-    def __init__(self, title: str = tr("更多设置"), parent: QWidget = None) -> None:
+    def __init__(self, title: str = tr("more_settings"), parent: QWidget = None) -> None:
         super().__init__(parent)
         self._title = title
         self._expanded = False
@@ -393,7 +395,7 @@ class ToggleHeader(QAbstractButton):
 class Collapsible(QWidget):
     """「更多设置」折叠区：展开时高度从 0 平滑过渡。"""
 
-    def __init__(self, body: QWidget, title: str = tr("更多设置"), parent: QWidget = None) -> None:
+    def __init__(self, body: QWidget, title: str = tr("more_settings"), parent: QWidget = None) -> None:
         super().__init__(parent)
         self._body = body
         self._expanded = False
@@ -571,10 +573,10 @@ class KeyButton(QPushButton):
 
     def _refresh_text(self) -> None:
         if self._capturing:
-            self.setText(tr("按任意键…"))
+            self.setText(tr("press_any_key"))
         else:
             self.setText(winapi.key_display(self._key))
-        self.setToolTip(tr("点击后按一个键；Esc 取消"))
+        self.setToolTip(tr("click_then_press_a_key_esc_cancels"))
 
     # -- 交互 ------------------------------------------------------
     def begin_capture(self) -> None:
@@ -649,7 +651,7 @@ class ColorButton(QPushButton):
         )
 
     def _pick(self) -> None:
-        chosen = QColorDialog.getColor(QColor(self._value), self, tr("选择颜色"))
+        chosen = QColorDialog.getColor(QColor(self._value), self, tr("select_color"))
         if chosen.isValid():
             self._value = chosen.name()
             self._refresh()
