@@ -2,86 +2,86 @@
 
 **Dual-channel autoclicker for Windows** ｜ [简体中文](README.md)
 
-Two click channels in one small program — left and right button each get their own, so you
-never need to run two clickers side by side. Clicks are delivered as window messages, which
-means the cursor is never moved and the target does not have to be in the foreground: you can
-keep using the mouse while it clicks.
+A dual-channel autoclicker for Windows: the left and right buttons each get an independent
+channel, both usable at the same time without running two programs. Clicks are delivered to the
+target window as window messages, so the cursor is not moved and the target does not need to be
+in the foreground.
 
 ![Main window](docs/screenshot-main.png)
 
----
+## Features
 
-## Quick start
+- Two independent channels, each with its own interval, trigger, simulated button and hotkey.
+- Clicks are sent as `PostMessage` / `SendMessage`; the cursor is never captured and the target
+  window may stay in the background.
+- Automatic target detection, preferring a foreground `java.exe` / `javaw.exe`; other programs
+  can be picked from a list or entered by process name.
+- Four themes, six accent colours plus a custom picker, four UI font sizes, and a selectable UI
+  font (ChillRoundM is bundled).
+- Simplified Chinese and English UI. Language files are JSON and can be added freely.
+- Overlay (HUD) showing state, rate, click count and interval for both channels, vertical or
+  horizontal, with enter/exit animations and click-through support.
+- Settings are saved automatically in `%APPDATA%\VexRush\config.json`, including window
+  position and both channel switches.
 
-1. Run `VexRush.exe` (portable, single file, no installer).
-2. The **Target app** box auto-selects a foreground `java.exe` / `javaw.exe` (i.e. Minecraft).
-   For anything else, pick it from the list or just type the process name (e.g. `msedge.exe`).
-3. Choose an interval, flip the channel switch on, then **hold** the trigger (mouse left /
-   right by default). Release to stop.
+## Window
 
-Everything — including window position and both switches — is saved automatically and restored
-next time.
+The main window consists of a target selection bar and two channel cards.
 
----
-
-## The window
-
-Two cards, **Click 1** and **Click 2**, fully independent:
-
-| Control | What it does |
+| Control | Description |
 | --- | --- |
-| switch (top right) | Master switch for that channel (also toggled by its hotkey) |
-| Interval | 1–2000 ms between clicks. 15 ms ≈ 66 clicks/s, 10 ms ≈ 100 clicks/s |
-| Trigger | Mouse left / right / middle, or any keyboard key (`Custom key`, then press it) |
-| Advanced (collapsible) | **Name** (renaming also updates the HUD), simulated button, on/off hotkey |
+| Switch (top right) | Enables the channel; also toggled by its hotkey |
+| Interval | Delay between clicks, 1–2000 ms. 15 ms is about 66 clicks/s, 10 ms about 100 clicks/s |
+| Trigger | Mouse left / right / middle, or any keyboard key (select "Custom key" and press it) |
+| Advanced (collapsible) | Channel name, simulated button, on/off hotkey. The name is also used in the overlay |
 | Rate (collapsible) | Live rate curve, total clicks, current clicks per second |
 
-The top bar also holds **Click HUD** (toggle) and **Settings**.
+The top bar also contains the **Click HUD** toggle and the **Settings** entry.
 
----
+## Usage
+
+1. Start `VexRush.exe`.
+2. Select the target program under "Target app"; for Minecraft this is normally `javaw.exe`.
+3. Set the interval, enable the channel, then hold the trigger. Clicks start on press and stop
+   on release.
 
 ## Settings
 
 | Section | Contents |
 | --- | --- |
-| Appearance | 4 themes (Light / Dark / Warm sand / Ink blue), 6 accent colours plus a custom picker, 4 UI font sizes, UI font, UI language |
-| Target app | Auto-detect (prefers a foreground java/javaw), PostMessage or SendMessage delivery |
-| Exclusive mode | **Only one channel**: turning one on turns the other off, so the two never spam together. **Restore previous**: turning the current channel off re-opens the one it replaced (only the most recent one is remembered, so repeated swaps never restore the wrong channel) |
-| IME | **Unavailable for now** (greyed out, "coming soon"): telling a text box / IME composition apart is too unreliable across programs, so the option stays off and locked |
-| HUD | Opens the HUD settings window |
-| Config file | Shows the real path, opens the data folder, import / export / reset |
+| Appearance | Theme, accent colour (including a custom picker), UI font size, UI font, UI language |
+| Target app | Auto-detection, message delivery mode (`PostMessage` background / `SendMessage` synchronous) |
+| Exclusive mode | **Only one channel**: enabling one channel disables the other. **Restore previous**: disabling the current channel re-enables the one it replaced (only the most recent one is remembered) |
+| IME | Unavailable (greyed out); see Known limitations |
+| HUD | Opens the overlay settings window |
+| Config file | Real config path, open data folder, import, export, reset to defaults |
 
-The data directory is fixed at **`%APPDATA%\VexRush`** (`config.json` and `lang\` live there).
-A leftover `config.json` next to the exe is migrated once on first start.
+Window easing can be disabled separately: dragging the title bar eases the window towards the
+cursor and snaps on release.
 
----
+## Overlay
 
-## Click HUD
+A frameless always-on-top panel for recording or streaming.
 
-A small always-on-top panel for recording or streaming: frameless, optionally click-through,
-showing state, rate, count and interval per channel.
+![Overlay settings](docs/screenshot-hud-settings.png)
 
-![HUD settings](docs/screenshot-hud-settings.png)
-
-- **Layout**: vertical / horizontal; the **title text** can be turned off and reworded.
-- **Content**: state / rate / clicks / interval, each individually switchable.
-- **Enter / exit animations**: fade, scale, slide, spring, blur, none — driven at the monitor
-  refresh rate (120 Hz here → 8 ms per frame, capped at 144 Hz).
-- **Dragging**: follows only while held, with eased interpolation (can be disabled or tuned).
-  On release it first **snaps to the pointer**, and only a genuine flick glides on — at most
-  **16 px**, and it can never leave the screen.
-- **Appearance**: font size, background opacity (backdrop only), overall opacity (dims the text
-  too), idle dimming, corner radius, padding, row gap, background and text colours, accent
-  source (follow theme / per channel / custom), rainbow flow and its speed.
-- The right-click menu lets you lock the position, toggle click-through, toggle each field,
-  replay the animation, open the settings, or hide the HUD.
-- **Replay animation** plays the enter animation again so you can judge it without toggling.
-
----
+- Layout: vertical or horizontal. The heading above the rows can be hidden and reworded.
+- Content: state, rate, clicks, interval — each individually switchable.
+- Enter / exit animations: fade, scale, slide, spring, blur, none. Frame interval follows the
+  monitor refresh rate, capped at 144 Hz.
+- Dragging: eased interpolation while held (can be disabled or tuned). On release the panel
+  snaps to the pointer; only a fast flick adds a small amount of inertia, limited to 16 px, and
+  the panel cannot leave the screen.
+- Appearance: font size, background opacity (backdrop only), overall opacity (including text),
+  idle dimming, corner radius, padding, row gap, background and text colours, accent source
+  (follow theme / per channel / custom), rainbow flow and its speed.
+- Context menu: lock position, click-through, per-field toggles, replay animation, open
+  settings, hide overlay.
 
 ## Language packs
 
-The UI language is data, not code — drop a JSON file into `%APPDATA%\VexRush\lang\`:
+UI languages are JSON files in `%APPDATA%\VexRush\lang\`, shipped with `zh_cn.json`,
+`en_us.json` and the template `example.json`.
 
 ```json
 {
@@ -91,140 +91,117 @@ The UI language is data, not code — drop a JSON file into `%APPDATA%\VexRush\l
 }
 ```
 
-- Keys are stable semantic ids — copy `example.json`, keep the keys, translate the values.
-- `_name` is what the language list shows.
-- Keep `%d` / `%s` / `%0.1f` placeholders; `%%` is a literal percent sign.
+- Keys are stable semantic IDs; copy `example.json` and translate the values.
+- `_name` is the name shown in the language list.
+- Keep the `%d`, `%s` and `%0.1f` placeholders; `%%` is a literal percent sign.
 - Missing keys fall back to the built-in Simplified Chinese text, then to the key itself.
-- Your own packs are marked *unofficial* in the list; the two shipped packs are not.
+- Languages added by users are marked *unofficial* in the list.
 
----
+## Requirements
 
-## When nothing happens
-
-1. **Right target?** The hint on the right of the target bar shows `process · window title`.
-2. **Elevation**: if the target runs elevated, VexRush must run elevated too, otherwise UIPI
-   blocks the messages.
-3. **Some programs never accept window messages**: games and tools reading input through
-   DirectInput / Raw Input ignore them by design. `SendMessage` occasionally helps, usually not.
-4. **Hotkey dead?** Defaults are `x` and `r`. Hotkeys are registered twice (low-level hook plus
-   `RegisterHotKey`), so they usually work while another window has focus — a fullscreen game
-   that grabs the keyboard exclusively may still swallow them.
-5. **It refuses to click while VexRush is focused** — that is deliberate, so pressing a UI
-   button can never leak clicks into the game.
-
----
+- Windows 10 / 11 (x64).
+- Single portable executable, no installation. Settings live in `%APPDATA%\VexRush`; deleting
+  that folder restores the defaults.
 
 ## Known limitations
 
-- Window-message clicking is not compatible with every program (see DirectInput above).
-- An elevated target requires an elevated VexRush.
-- The "ignore while typing" guard is temporarily unavailable (see above).
-- Windows 10 / 11 (x64) only.
+- Programs that read input through `DirectInput` / `Raw Input` do not accept window messages and
+  cannot be clicked this way.
+- If the target runs elevated, VexRush must run elevated as well, otherwise the system blocks
+  the window messages.
+- The "ignore while typing" option is temporarily unavailable: input-box and IME composition
+  detection differs too much between programs to be reliable, so the option is off and locked.
+- Exclusive fullscreen programs may swallow global hotkeys. Hotkeys are registered through both
+  a low-level keyboard hook and the system hotkey API, which covers most cases.
+- While the VexRush window is in the foreground no clicks are sent, so interacting with its own
+  interface never leaks into the target.
 
----
+## Development
 
-# Developer notes
-
-## Working on the source
+### Running from source
 
 ```bat
 pip install PyQt5 pywin32 pynput psutil pyinstaller
 python main.py                 :: run from source
-python main.py --multi         :: ignore the single-instance lock (testing)
+python main.py --multi         :: ignore the single-instance lock
 ```
 
-High DPI uses `AA_EnableHighDpiScaling` + `AA_UseHighDpiPixmaps` with the `PassThrough`
-rounding policy; verified at 175 %.
+High DPI uses `AA_EnableHighDpiScaling` and `AA_UseHighDpiPixmaps` with the `PassThrough`
+rounding policy.
 
-## Building
+### Building
 
 ```bat
 python -m PyInstaller --noconfirm --clean dual_clicker.spec
-:: -> dist\VexRush.exe  (onefile, console-less, icon + version info, embeds assets\fonts and assets\lang)
+:: output: dist\VexRush.exe (onefile, console-less, icon + version info, embeds assets\fonts and assets\lang)
 ```
 
-Close any leftover `dist\VexRush.exe` first, otherwise the build fails with
+Close any leftover `dist\VexRush.exe` process first, otherwise the build fails with
 `PermissionError: [WinError 5]`.
 
-## Tests
-
-All three suites run real windows and real input on Windows, and point `APPDATA` at a throwaway
-folder so they never touch your settings:
+### Tests
 
 ```bat
-python tests\selftest.py     :: config / theme / i18n / HUD geometry and dragging / message posting
-python tests\e2e_test.py     :: holds F19 against a throwaway target, letter hotkey, real mouse, foreground guard
-python tests\exe_check.py    :: packaged exe: high DPI, config round-trip, restart restore (takes an exe path)
+python tests\selftest.py     :: config read/write and migration, theme and language, HUD geometry and dragging, window message delivery
+python tests\e2e_test.py     :: real keyboard and mouse input, target window counters, hotkey toggling, foreground guard
+python tests\exe_check.py    :: packaged binary: high DPI size, config round-trip, position restore on restart
 ```
 
-Notes:
+All three suites run real windows and real input on Windows, and point `APPDATA` at a temporary
+directory so the user configuration is neither read nor written.
 
-- Drag / animation tests need a **clean temporary APPDATA**, otherwise a stale window geometry
-  makes them fail for the wrong reason.
-- `e2e_test` must run with `cfg.exclusive = False` — it verifies that both channels are
-  independent; exclusive mode has its own test in `selftest`.
-- `exe_check` also deletes `dist\config.json`: a leftover portable config is migrated into the
-  data directory at startup and drags the old window size along.
+- Drag and animation tests need a clean temporary `APPDATA`; a leftover window geometry makes
+  them fail for the wrong reason.
+- `e2e_test` sets `cfg.exclusive = False` to verify the channels are independent; exclusive mode
+  is covered separately in `selftest`.
+- `exe_check` deletes `dist\config.json`: a leftover portable config is migrated into the data
+  directory at startup and brings the old window size with it.
 
-## Layout
+### Layout
 
 ```
-main.py                  entry point: high DPI, single instance, QApplication, fonts + language
+main.py                  entry point: high DPI, single instance, QApplication, fonts, language
 app/
-  config.py              dataclass config, atomic save, v1→v2 migration, data/lang dirs
-  engine.py              pynput input hub, target registry, click worker, channels
-  winapi.py              screen / refresh-rate / IME queries, window-message clicking, hotkeys
-  theme.py               design tokens, QSS + palette generation, custom accents
-  widgets.py             custom controls (switch, number field, segmented, sparkline …)
-  mainwindow.py          main window: target bar, cards, footer, wiring
-  channel_card.py        one click channel card (interval / trigger / advanced / rate)
-  window_drag.py         Win32 side: caption drag takeover, hotkey registration, auto sizing
-  switcher.py            blurred full-screen curtain that hides the theme rebuild cost
-  overlay.py             the Click HUD: painting, layout, drag, position
-  overlay_anim.py        HUD enter / exit animations and easing curves
-  overlay_menu.py        HUD right-click menu (custom rounded dark menu)
-  overlay_settings.py    HUD settings window
+  config.py              config dataclasses, atomic save, v1→v2 migration, data and lang dirs
+  engine.py              input listening, target registry, click worker, channels
+  winapi.py              screen and refresh-rate queries, window-message clicks, hotkey registration
+  theme.py               design tokens, QSS and palette generation, custom accents
+  widgets.py             custom controls (switch, number field, segmented control, sparkline)
+  mainwindow.py          main window: target bar, channel cards, footer, signal wiring
+  channel_card.py        one channel card (interval / trigger / advanced / rate)
+  window_drag.py         caption drag takeover, hotkey registration, sizing helpers
+  switcher.py            blurred curtain used while switching themes
+  overlay.py             overlay painting, layout, dragging and position
+  overlay_anim.py        overlay enter/exit animations and easing curves
+  overlay_menu.py        overlay context menu
+  overlay_settings.py    overlay settings window
   settings.py            application settings window
-  dialogbase.py          shared dialog scaffolding (header / scroll area / footer, grid rows)
-  fonts.py               bundled font loading + system font list
-  i18n.py                JSON language packs: built-in assets/lang + user lang\
-  icon.py                generated application icon
-  screen.py              monitor geometry helpers (clamp a point / widget on-screen)
-  textfmt.py             small number / text formatters shared by UI modules
-  debug.py               opt-in file logging (`VEXRUSH_DEBUG`)
-assets/fonts/            ChillRoundM.otf + its OFL licence text
+  dialogbase.py          shared dialog scaffolding (header, scroll area, footer, grid rows)
+  fonts.py               bundled font loading and system font enumeration
+  i18n.py                language packs: built-in assets/lang plus user lang\
+  icon.py                application icon drawing
+  screen.py              monitor geometry helpers (clamping points and widgets on-screen)
+  textfmt.py             number and text formatters
+  debug.py               optional file logging (VEXRUSH_DEBUG)
+assets/fonts/            ChillRoundM and its OFL licence text
 assets/lang/             zh_cn.json, en_us.json, example.json
 tests/, tools/           test suites and developer tools (preview.py, make_icon.py)
-docs/                    screenshots used by the READMEs
+docs/                    screenshots referenced by the READMEs
 ```
 
-## Traps worth knowing
+### Implementation notes
 
-1. **Schedule with `time.perf_counter()`, never `time.monotonic()`.** The latter is
-   `GetTickCount64` on Windows with 15.6 ms granularity, which collapses every interval at or
-   below 15 ms to ~16 ms — 10 ms gave only 65 clicks/s.
-2. **The `WM_MOVING` / `WM_SIZING` lParam RECT is in physical pixels** while Qt geometry is in
-   logical pixels; mixing them at 175 % scaling makes the window jitter. Dragging no longer
-   uses the system modal loop at all: the app calls `SetCapture` and eases with `SetWindowPos`
-   every frame.
-3. **PyQt5 aborts the process when a slot raises an uncaught exception.** Wrap timer and input
-   callbacks in a thin `try/except` shell, otherwise one `NameError` becomes "freezes and dies".
-4. **`QFontDatabase` / `QFontMetrics` must be used after `QApplication` exists**, or the frozen
-   build dies at startup with an access violation (0xC0000005) and no stderr. Use a
-   `faulthandler.enable(file=...)` probe entry point to find it.
-5. **Splitting modules drops module-level constants** (the `NameError` only fires on that code
-   path). An AST sweep for "used but never defined" names is a cheap pre-commit check.
-6. **Keep test windows inside the virtual screen** (the offscreen platform is 768×576);
-   otherwise `clamp_point` drags them back to the edge and the measured movement is a lie.
-7. The global git config rewrites `github.com` through `gh-proxy.com` here — remove that
-   section (or use a reachable URL) before pushing.
-
-## Commit and release convention
-
-- First line: version + one sentence. Body: **Fix / Add / Remove** sections.
-- Before releasing: three suites green → bump `APP_VERSION` and all four version fields in
-  `version_info.txt` (both the tuples and the strings) → rebuild → `exe_check`.
-- Artifacts stay in `dist\`; never commit them.
+- Click scheduling uses `time.perf_counter()`. `time.monotonic()` maps to `GetTickCount64` on
+  Windows with 15.6 ms granularity, which collapses intervals of 15 ms or less to about 16 ms.
+- The `WM_MOVING` / `WM_SIZING` `lParam` rectangle is in physical pixels while Qt `geometry()`
+  is in logical pixels; they must not be mixed under DPI scaling. Window dragging is handled by
+  the application instead of the system modal move loop.
+- PyQt5 terminates the process when a slot raises an uncaught exception, so timer and input
+  callbacks are wrapped in `try/except`.
+- `QFontDatabase` and `QFontMetrics` require an existing `QApplication`, otherwise the frozen
+  build exits with `0xC0000005` at startup without any stderr output.
+- Splitting modules can drop module-level constants; the resulting `NameError` only appears when
+  that code path executes.
 
 ## Licence
 
@@ -233,4 +210,4 @@ The application source is MIT — see `LICENSE`.
 The bundled font **ChillRoundM** comes from [Warren2060/ChillRound](https://github.com/Warren2060/ChillRound)
 and is licensed under the SIL Open Font License 1.1; the licence text ships next to the font at
 `assets/fonts/LICENSE-ChillRound.txt`. Its reserved font names (`ChillRoundF`, `ChillRoundM`)
-are kept unchanged as the OFL requires, and the font is **not** covered by the MIT licence above.
+are kept unchanged as the OFL requires, and the font is not covered by the MIT licence above.
