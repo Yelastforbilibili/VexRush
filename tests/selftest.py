@@ -21,6 +21,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import win32api
+import ctypes
+
 import win32con
 import win32gui
 from PyQt5.QtCore import Qt
@@ -621,17 +623,33 @@ def test_window_easing_and_lang() -> None:
     window.move(140, 100)
     window.resize(700, 380)
     _pump()
+    # 窗口缓动：全程物理像素，只改 lParam 里的矩形（自己不动窗口）
+    # offscreen 平台没有真实窗口句柄，这里直接喂一组物理像素坐标验证换算逻辑；
+    # 真窗口那条路径由 __probe_ease2.py / e2e 覆盖。
+    offscreen = QApplication.platformName() == "offscreen"
+    if offscreen:
+        start = [100, 100, 900, 500]
+        window._ease_pos = [float(v) for v in start]
+        window._ease_stamp = time.perf_counter() - 0.008
+        window._drag_active = True
+    else:
+        window._ease_reset()
+        start = list(win32gui.GetWindowRect(int(window.winId())))
+    probe = (ctypes.c_long * 4)(start[0] + 300, start[1] + 200,
+                                start[2] + 300, start[3] + 200)
     window._ease_stamp = time.perf_counter() - 0.008
-    window._ease_to(QRect(300, 160, 700, 380))
-    before = window.geometry()
-    window._ease_step()
-    after = window.geometry()
-    check("窗口缓动是逐步靠过去的（不是瞬移）",
-          after.x() != before.x() and abs(after.x() - 300) > 1,
-          "%d -> %d（目标 300）" % (before.x(), after.x()))
-    window._ease_finish()
-    _pump()
-    check("收尾时贴到目标位置", window.geometry().x() == 300, str(window.geometry().x()))
+    ok_ease = window._ease_apply(ctypes.addressof(probe))
+    step_x = int(probe[0])
+    check("窗口缓动接管了消息并把矩形往目标挪", ok_ease and start[0] < step_x < start[0] + 300,
+          "%d -> %d（目标 %d）" % (start[0], step_x, start[0] + 300))
+    moved = [int(v) for v in probe]
+    inside = all(start[i] <= moved[i] <= start[i] + (300 if i in (0, 2) else 200)
+                 for i in range(4))
+    check("缓动没有回头、也没有过冲", inside,
+          "起点 %s -> 现在 %s" % (start, moved))
+    window._ease_end()
+    _pump(20)
+    check("松手后退出拖动状态", not getattr(window, "_drag_active", True))
 
     window.resize(500, 300)
     _pump(40)

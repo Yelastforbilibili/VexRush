@@ -8,6 +8,8 @@ import math
 import time
 from typing import List, Optional
 
+import win32gui
+
 from PyQt5.QtCore import QEasingCurve, QRect, Qt, QTimer, QVariantAnimation, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QShowEvent
 from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLineEdit, QMainWindow,
@@ -22,6 +24,7 @@ from .overlay_settings import OverlaySettingsDialog
 from .settings import SettingsDialog
 from .i18n import tr
 
+WM_ENTERSIZEMOVE = 0x0231
 WM_SIZING = 0x0214
 WM_MOVING = 0x0216
 WM_EXITSIZEMOVE = 0x0232
@@ -773,7 +776,8 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._sync_busy_geometry()
-        if getattr(self, "_easing", False) or getattr(self, "_width_guard", False):
+        if (getattr(self, "_drag_active", False) or getattr(self, "_easing", False)
+                or getattr(self, "_width_guard", False)):
             return
         # 用户手动改窗口大小后，若卡片被挤掉就重新贴合高度（#5）
         if getattr(self, "_fit_timer", None) is None:
@@ -800,82 +804,95 @@ class MainWindow(QMainWindow):
             self._animate_width(need)
 
     # ------------------------------------------------- 拖动/缩放时窗口缓动跟随
+    # 关键：lParam 里的 RECT 是「物理像素」，而 Qt 的 geometry 是「逻辑像素」。
+    # 早先版本把物理像素当逻辑像素去 setGeometry，在 175% DPI 下差了 1.75 倍，
+    # 于是窗口在「系统摆的位置」和「我自己摆的位置」之间来回弹 —— 表现就是抽搐。
+    # 现在全程只用物理像素，而且绝不自己摆窗口：只把缓动后的矩形写回 lParam，
+    # 由系统去摆放。只有一个位置源，不可能打架。
     def nativeEvent(self, event_type, message):
-        """接管 WM_SIZING / WM_MOVING：先记账，再由定时器缓动靠过去。"""
-        if not getattr(self.cfg, "smooth_window", False):
+        """接管 WM_MOVING / WM_SIZING：只调整 lParam 里的矩形，由系统摆放窗口。"""
+        if event_type != b"windows_generic_MSG":
             return super().nativeEvent(event_type, message)
         try:
             msg = ctypes.wintypes.MSG.from_address(int(message))
         except Exception:
             return super().nativeEvent(event_type, message)
-        if msg.message in (WM_SIZING, WM_MOVING):
-            try:
-                values = ctypes.cast(msg.lParam, ctypes.POINTER(ctypes.c_long * 4)).contents
-                left, top, right, bottom = (int(values[0]), int(values[1]),
-                                            int(values[2]), int(values[3]))
-            except Exception:
-                return super().nativeEvent(event_type, message)
-            self._ease_to(QRect(left, top, max(320, right - left), max(200, bottom - top)))
-            return True, 1                      # 拦下系统默认的瞬间贴合
+        # 不论开不开缓动，拖动期间都要记下来：resizeEvent 里不能再插自动贴合，
+        # 否则会跟系统的拖动循环互相推，画面就是抽。
+        if msg.message == WM_ENTERSIZEMOVE:
+            self._ease_reset()
+            return super().nativeEvent(event_type, message)
         if msg.message == WM_EXITSIZEMOVE:
-            self._ease_finish()
+            self._ease_end()
+            return super().nativeEvent(event_type, message)
+        if msg.message in (WM_SIZING, WM_MOVING) and getattr(self.cfg, "smooth_window", False):
+            if getattr(self, "_ease_pos", None) is None:
+                self._ease_reset()
+            if self._ease_apply(msg.lParam):
+                return True, 1
         return super().nativeEvent(event_type, message)
 
-    def _ease_to(self, target: QRect) -> None:
-        self._ease_target = target
-        timer = getattr(self, "_ease_timer", None)
-        if timer is None:
-            timer = QTimer(self)
-            timer.setTimerType(Qt.PreciseTimer)
-            timer.setInterval(winapi.frame_interval_ms())
-            timer.timeout.connect(self._ease_step)
-            self._ease_timer = timer
-        if not timer.isActive():
-            self._ease_stamp = time.perf_counter()
-            timer.start()
+    def _dpi_scale(self) -> float:
+        """物理像素 / 逻辑像素（把最小尺寸换算成物理像素时用）。"""
+        try:
+            rect = win32gui.GetWindowRect(int(self.winId()))
+            physical = max(1, rect[2] - rect[0])
+            return max(1.0, physical / float(max(1, self.width())))
+        except Exception:
+            return 1.0
 
-    def _ease_finish(self) -> None:
-        timer = getattr(self, "_ease_timer", None)
-        target = getattr(self, "_ease_target", None)
-        if timer is not None:
-            timer.stop()
-        if target is not None:
-            self._easing = True
-            try:
-                self.setGeometry(target)
-            finally:
-                self._easing = False
-        self._ease_target = None
-        self._fit_height(allow_shrink=False, animate=True)
-
-    def _ease_step(self) -> None:
-        target = getattr(self, "_ease_target", None)
-        timer = getattr(self, "_ease_timer", None)
-        if target is None or timer is None:
+    def _ease_reset(self) -> None:
+        """开始拖动：缓动起点对齐到窗口当前位置，并停掉所有会自己改窗口大小的动画。"""
+        for name in ("_fit_timer", "_squeeze_timer"):
+            timer = getattr(self, name, None)
             if timer is not None:
                 timer.stop()
-            return
-        now = time.perf_counter()
-        dt = min(0.05, max(0.001, now - getattr(self, "_ease_stamp", now)))
-        self._ease_stamp = now
-        current = self.geometry()
-        k = min(0.5, 1.0 - math.exp(-dt * EASE_RATE))
-        left = current.x() + (target.x() - current.x()) * k
-        top = current.y() + (target.y() - current.y()) * k
-        width = current.width() + (target.width() - current.width()) * k
-        height = current.height() + (target.height() - current.height()) * k
-        close = (abs(target.x() - left) < 1.0 and abs(target.y() - top) < 1.0
-                 and abs(target.width() - width) < 1.0 and abs(target.height() - height) < 1.0)
-        if close:
-            left, top, width, height = (target.x(), target.y(), target.width(), target.height())
-        self._easing = True
+        anim = getattr(self, "_width_anim", None)
+        if anim is not None:
+            anim.stop()
         try:
-            self.setGeometry(QRect(int(round(left)), int(round(top)),
-                                   int(round(width)), int(round(height))))
-        finally:
-            self._easing = False
-        if close:
-            timer.stop()
+            rect = win32gui.GetWindowRect(int(self.winId()))
+            self._ease_pos = [float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3])]
+        except Exception:
+            self._ease_pos = None
+        self._ease_stamp = time.perf_counter()
+        self._drag_active = True
+
+    def _ease_apply(self, lparam) -> bool:
+        """把 lParam 里的目标矩形向缓动位置靠近一步，再把结果写回 lParam。"""
+        try:
+            values = ctypes.cast(lparam, ctypes.POINTER(ctypes.c_long * 4)).contents
+        except Exception:
+            return False
+        target = [float(values[0]), float(values[1]), float(values[2]), float(values[3])]
+        pos = getattr(self, "_ease_pos", None)
+        if pos is None or not getattr(self, "_drag_active", False):
+            self._ease_reset()
+            pos = getattr(self, "_ease_pos", None)
+            if pos is None:
+                return False
+        now = time.perf_counter()
+        dt = min(0.05, max(0.002, now - getattr(self, "_ease_stamp", now)))
+        self._ease_stamp = now
+        # 位置突然跳很远（换显示器 / DPI 变化 / 系统重排）就别追，直接对齐，免得来回弹
+        if abs(target[0] - pos[0]) + abs(target[1] - pos[1]) > 1600:
+            pos = list(target)
+        k = min(0.6, 1.0 - math.exp(-dt * EASE_RATE))
+        eased = [pos[i] + (target[i] - pos[i]) * k for i in range(4)]
+        self._ease_pos = eased
+        values[0] = int(round(eased[0]))
+        values[1] = int(round(eased[1]))
+        values[2] = int(round(eased[2]))
+        values[3] = int(round(eased[3]))
+        return True
+
+    def _ease_end(self) -> None:
+        self._ease_pos = None
+        self._drag_active = False
+        self._ease_target = None
+        QTimer.singleShot(80, lambda: self._fit_height(allow_shrink=False, animate=True))
+        if self.width() < self._min_width_for_cards():
+            QTimer.singleShot(140, self._spring_back_width)
 
     def _fit_height(self, allow_shrink: bool = False, animate: bool = True) -> None:
         """让窗口高度贴合卡片内容：挤到就长高，多出空白就收一点。"""
