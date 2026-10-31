@@ -9,6 +9,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from . import winapi
 from .config import ChannelConfig
+from . import debug
 from .i18n import tr
 
 try:
@@ -118,7 +119,10 @@ class InputHub(QObject):
             return
         if self.ignore_ime and winapi.text_input_active():
             # 正在打字：这一下按键交给前台程序，热键与键盘触发都不响应
+            debug.log("key", "blocked %s (typing: caret=%s ime=%s)"
+                      % (name, winapi.caret_visible(), winapi.ime_composing()))
             return
+        debug.log("key", "press %s (ignore_ime=%s)" % (name, self.ignore_ime))
         spec = "k:" + name
         self.state.set(spec, True)
         try:

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 import time
 from typing import List, Optional
 
@@ -19,7 +20,10 @@ from . import winapi
 from .config import OverlayConfig
 from .widgets import set_tokens as _set_global_tokens
 from .widgets import tk
+from . import screen as screen_mod
 from .i18n import tr
+from .overlay_anim import OverlayAnimMixin
+from .overlay_menu import OverlayMenu
 
 FRAME_MS = 16                 # 兜底帧长；实际用 winapi.frame_interval_ms()
 BAR_W = 3.0
@@ -44,59 +48,7 @@ def _meta_sample(cfg: OverlayConfig) -> str:
     return "  ".join(parts)
 
 
-class OverlayMenu(QMenu):
-    """悬浮窗右键菜单：无边框圆角、跟随悬浮窗配色。"""
-
-    def __init__(self, cfg: OverlayConfig, accent: QColor, parent: QWidget = None) -> None:
-        super().__init__(parent)
-        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WA_NoSystemBackground, True)
-        self.setStyleSheet(self._qss(cfg, accent))
-
-    @staticmethod
-    def _qss(cfg: OverlayConfig, accent: QColor) -> str:
-        bg = QColor(cfg.bg_color)
-        fg = QColor(cfg.fg_color)
-        radius = max(6, int(cfg.radius))
-        hover = QColor(accent)
-        return """
-QMenu {
-    background-color: rgba(%d, %d, %d, %d);
-    border: 1px solid rgba(%d, %d, %d, 36);
-    border-radius: %dpx;
-    padding: 6px;
-    color: rgba(%d, %d, %d, 235);
-}
-QMenu::item {
-    padding: 6px 22px 6px 10px;
-    border-radius: 6px;
-    margin: 1px 2px;
-    color: rgba(%d, %d, %d, 235);
-}
-QMenu::item:disabled {
-    color: rgba(%d, %d, %d, 110);
-}
-QMenu::item:selected {
-    background-color: rgba(%d, %d, %d, 56);
-    color: rgba(%d, %d, %d, 255);
-}
-QMenu::separator {
-    height: 1px;
-    margin: 5px 10px;
-    background-color: rgba(%d, %d, %d, 28);
-}
-""" % (bg.red(), bg.green(), bg.blue(), int(250 * cfg.opacity / 100.0),
-       fg.red(), fg.green(), fg.blue(), radius,
-       fg.red(), fg.green(), fg.blue(),
-       fg.red(), fg.green(), fg.blue(),
-       fg.red(), fg.green(), fg.blue(),
-       hover.red(), hover.green(), hover.blue(),
-       fg.red(), fg.green(), fg.blue(),
-       fg.red(), fg.green(), fg.blue())
-
-
-class OverlayWindow(QWidget):
+class OverlayWindow(OverlayAnimMixin, QWidget):
     positionChanged = pyqtSignal(str)
     styleChanged = pyqtSignal()
     requestSettings = pyqtSignal()
@@ -120,6 +72,7 @@ class OverlayWindow(QWidget):
         self._drag_target: Optional[QPoint] = None
         self._drag_active = False
         self._vel = QPointF(0.0, 0.0)
+        self._samples = deque(maxlen=10)
         self._anim_t = 1.0
         self._anim_kind = "in"
         self._anim_start = 0.0
@@ -376,11 +329,19 @@ class OverlayWindow(QWidget):
 
         if not self._drag_active and (abs(self._vel.x()) > 1.0 or abs(self._vel.y()) > 1.0):
             current = self.pos()
-            self.move(int(round(current.x() + self._vel.x() * dt)),
-                      int(round(current.y() + self._vel.y() * dt)))
-            decay = math.exp(-dt * 4.2)
+            wanted = QPoint(int(round(current.x() + self._vel.x() * dt)),
+                            int(round(current.y() + self._vel.y() * dt)))
+            area = screen_mod.screen_of(self)
+            limited = screen_mod.clamp_point(wanted, (self.width(), self.height()), area)
+            if limited.x() != wanted.x():       # 撞到屏幕边就把横向速度归零
+                self._vel = QPointF(0.0, self._vel.y())
+            if limited.y() != wanted.y():
+                self._vel = QPointF(self._vel.x(), 0.0)
+            if limited != current:
+                self.move(limited)
+            decay = math.exp(-dt * GLIDE_DECAY)
             self._vel = QPointF(self._vel.x() * decay, self._vel.y() * decay)
-            if abs(self._vel.x()) < 12.0 and abs(self._vel.y()) < 12.0:
+            if abs(self._vel.x()) < 30.0 and abs(self._vel.y()) < 30.0:
                 self._vel = QPointF(0.0, 0.0)
                 self.positionChanged.emit(self.save_position())
             settled = False
@@ -389,113 +350,7 @@ class OverlayWindow(QWidget):
         if settled and not self._needs_frames():
             self._timer.stop()
 
-    # ------------------------------------------------------------ 缓动
-    @staticmethod
-    def _ease_out_cubic(p: float) -> float:
-        return 1.0 - (1.0 - p) ** 3
-
-    @staticmethod
-    def _ease_out_back(p: float, overshoot: float = 1.34) -> float:
-        q = p - 1.0
-        return 1.0 + (overshoot + 1.0) * q ** 3 + overshoot * q ** 2
-
-    @staticmethod
-    def _ease_in_out_sine(p: float) -> float:
-        return -(math.cos(math.pi * p) - 1.0) / 2.0
-
-    def _anim_seconds(self, kind: str) -> float:
-        return {"none": 0.0, "fade": 0.22, "slide": 0.26, "scale": 0.26,
-                "spring": 0.34, "blur": 0.3}.get(kind, 0.22)
-
-    def playing(self) -> bool:
-        return self._anim_active
-
-    def play_in(self) -> None:
-        """入场：按 cfg.anim_in 选择动画。"""
-        kind = self.cfg.anim_in or "fade"
-        self._anim_kind = "in"
-        self._anim_len = self._anim_seconds(kind)
-        self._anim_t = 0.0 if self._anim_len > 0 else 1.0
-        self._anim_active = self._anim_len > 0
-        self._anim_start = time.perf_counter()
-        if not self.isVisible():
-            self.show()
-        self._apply_window_style()
-        if self._anim_active:
-            self._start_frames()
-        self.update()
-
-    def play_out(self, hide_after: bool = True) -> None:
-        """出场：放完再真正隐藏，避免硬切。"""
-        kind = self.cfg.anim_out or "fade"
-        self._anim_kind = "out"
-        self._anim_len = self._anim_seconds(kind)
-        self._hide_after = bool(hide_after)
-        if self._anim_len <= 0 or not self.isVisible():
-            self._anim_active = False
-            self._anim_t = 1.0
-            if hide_after:
-                self.hide()
-            return
-        self._anim_t = 0.0
-        self._anim_active = True
-        self._anim_start = time.perf_counter()
-        self._start_frames()
-        self.update()
-
-    def _anim_progress(self, now: float) -> None:
-        if not self._anim_active:
-            return
-        if self._anim_len <= 0:
-            self._anim_t = 1.0
-            self._anim_active = False
-            return
-        raw = (now - self._anim_start) / self._anim_len
-        self._anim_t = 1.0 if raw >= 1.0 else max(0.0, raw)
-        if raw >= 1.0:
-            self._anim_active = False
-            if self._anim_kind == "out" and getattr(self, "_hide_after", True):
-                self.hide()
-
-    def _anim_curve(self) -> float:
-        kind = self.cfg.anim_in if self._anim_kind == "in" else self.cfg.anim_out
-        t = max(0.0, min(1.0, self._anim_t))
-        if kind == "spring":
-            return max(0.0, self._ease_out_back(t))
-        if kind == "scale":
-            return self._ease_out_cubic(t)
-        if kind == "blur":
-            return self._ease_in_out_sine(t)
-        return self._ease_out_cubic(t)
-
-    def _anim_paint_state(self):
-        """返回 (额外透明度倍率, 缩放, 竖直位移)。"""
-        kind = self.cfg.anim_in if self._anim_kind == "in" else self.cfg.anim_out
-        if kind == "none" or (not self._anim_active and self._anim_t >= 1.0):
-            return 1.0, 1.0, 0.0
-        t = max(0.0, min(1.0, self._anim_t))
-        if self._anim_kind == "out":
-            t = 1.0 - t
-        if kind == "spring":
-            curve = self._ease_out_back(t) if self._anim_kind == "in" else self._ease_out_cubic(t)
-        elif kind == "blur":
-            curve = self._ease_in_out_sine(t)
-        else:
-            curve = self._ease_out_cubic(t)
-        if kind == "spring":
-            # 弹性：允许轻微过冲（回弹那一下），透明度仍夹在 0..1
-            raw = max(0.0, curve)
-            return min(1.0, raw), 0.80 + 0.20 * raw, 0.0
-        curve = max(0.0, min(1.0, curve))
-        if kind == "slide":
-            return curve, 1.0, (1.0 - curve) * 18.0
-        if kind == "scale":
-            return curve, 0.90 + 0.10 * curve, 0.0
-        if kind == "blur":
-            return min(1.0, curve * 1.15), 1.04 - 0.04 * curve, 0.0
-        return curve, 1.0, 0.0
-
-    # ------------------------------------------------------------ 颜色
+    # ------------------------------------------------------------ 配色
     def _accent_color(self, index: int, row: dict) -> QColor:
         mode = self.cfg.accent_mode
         if mode == "custom":
@@ -655,17 +510,19 @@ class OverlayWindow(QWidget):
     def restore_position(self) -> None:
         self._rebuild_fonts()
         self._relayout(force=True)
+        area = screen_mod.screen_of(self)
         text = (self.cfg.pos or "").strip()
         if text:
             try:
                 x_text, y_text = text.split(",")
-                self.move(int(float(x_text)), int(float(y_text)))
+                wanted = QPoint(int(float(x_text)), int(float(y_text)))
+                fixed = screen_mod.clamp_point(wanted, (self.width(), self.height()), area)
+                self.move(fixed)
                 return
             except (ValueError, TypeError):
                 pass
-        screen = self.screen().availableGeometry() if self.screen() else None
-        if screen is not None:
-            self.move(screen.right() - self.width() - 22, screen.top() + 22)
+        if area is not None:
+            self.move(area.right() - self.width() - 22, area.top() + 22)
 
     def save_position(self) -> str:
         pos = "%d,%d" % (self.x(), self.y())
@@ -699,14 +556,18 @@ class OverlayWindow(QWidget):
     def mouseMoveEvent(self, event) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             target = event.globalPos() - self._drag_offset
-            previous = self._drag_target or self.pos()
             now = time.perf_counter()
-            dt = max(0.0, now - getattr(self, "_drag_stamp", now))
-            if dt > 0.004:
-                # 用最近一段位移估算松手时的惯性速度
-                self._vel = QPointF((target.x() - previous.x()) / dt * 0.65,
-                                    (target.y() - previous.y()) / dt * 0.65)
-                self._drag_stamp = now
+            self._samples.append((now, target))
+            while len(self._samples) > 10:
+                self._samples.popleft()
+            # 速度取最近 90ms 的平均值：单帧抖动不会被放大成「甩出去」
+            recent = [item for item in self._samples if now - item[0] <= 0.09]
+            if len(recent) >= 2:
+                first_t, first_p = recent[0]
+                span = max(0.016, now - first_t)
+                self._vel = QPointF((target.x() - first_p.x()) / span,
+                                    (target.y() - first_p.y()) / span)
+            self._drag_stamp = now
             self._drag_target = target
             if not self.cfg.drag_smooth:
                 self.move(target)
@@ -720,18 +581,18 @@ class OverlayWindow(QWidget):
         if self._drag_offset is not None:
             self._drag_offset = None
             self._drag_active = False
-            if self.cfg.drag_smooth and self._drag_target is not None:
-                self.move(self._drag_target)
+            # 松手不要瞬移到鼠标位置：缓动会自己把最后一点路走完，
+            # 之后再带一点点惯性滑停（幅度很小，且始终夹在屏幕里）。
             self._drag_target = None
             speed = math.hypot(self._vel.x(), self._vel.y())
-            if not self.cfg.drag_inertia or speed < 60.0:
+            if not self.cfg.drag_inertia or speed < 45.0:
                 self._vel = QPointF(0.0, 0.0)
                 self.positionChanged.emit(self.save_position())
             else:
-                # 惯性滑行，停稳后再保存位置
-                limit = 2600.0
+                limit = float(GLIDE_MAX_SPEED)
                 if speed > limit:
-                    self._vel = QPointF(self._vel.x() / speed * limit, self._vel.y() / speed * limit)
+                    self._vel = QPointF(self._vel.x() / speed * limit,
+                                        self._vel.y() / speed * limit)
                 self._start_frames()
             event.accept()
             return

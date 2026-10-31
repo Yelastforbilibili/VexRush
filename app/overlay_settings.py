@@ -17,6 +17,7 @@ class OverlaySettingsDialog(SectionDialog):
 
     changed = pyqtSignal(str)
     requestPreview = pyqtSignal()
+    requestResetPosition = pyqtSignal()
 
     def __init__(self, app_cfg: AppConfig, parent: QWidget = None) -> None:
         super().__init__(tr("hud_settings_2"), 580, 580, parent)
@@ -201,6 +202,7 @@ class OverlaySettingsDialog(SectionDialog):
     def _reset_pos(self) -> None:
         self.cfg.overlay.pos = ""
         self._commit("overlay")
+        self.requestResetPosition.emit()
 
     def _reset_style(self) -> None:
         fresh = OverlayConfig()

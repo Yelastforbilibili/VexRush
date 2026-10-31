@@ -264,10 +264,12 @@ class SettingsDialog(SectionDialog):
         webbrowser.open(cfg_mod.GITHUB_URL)
 
     def _open_data_dir(self) -> None:
+        folder = cfg_mod.data_dir()
         try:
-            os.startfile(cfg_mod.app_dir())
+            os.makedirs(folder, exist_ok=True)
+            os.startfile(folder)
         except OSError:
-            QMessageBox.warning(self, tr("could_not_open"), cfg_mod.app_dir())
+            QMessageBox.warning(self, tr("could_not_open"), folder)
 
     def _import_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("import_config"), os.path.expanduser("~"),

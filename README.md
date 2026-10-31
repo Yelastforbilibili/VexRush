@@ -115,17 +115,38 @@ app/
   winapi.py              screen / refresh-rate / IME queries, window-message clicking
   theme.py               design tokens, QSS + palette generation
   widgets.py             custom controls (switch, number field, segmented, sparkline …)
-  overlay.py             the Click HUD: painting, animations, drag, context menu
+  mainwindow.py          main window: target bar, cards, footer, wiring
+  channel_card.py        one click channel card (interval / trigger / advanced / rate)
+  window_drag.py         Win32 side: title-bar drag, hotkey registration, auto sizing
+  switcher.py            blurred full-screen curtain that hides the theme rebuild cost
+  overlay.py             the Click HUD: painting, layout, drag, position
+  overlay_anim.py        HUD enter / exit animations and easing curves
+  overlay_menu.py        HUD right-click menu (custom rounded dark menu)
   overlay_settings.py    HUD settings window
   settings.py            application settings window
   dialogbase.py          shared dialog scaffolding (header / scroll area / footer, grid rows)
   fonts.py               bundled font loading + system font list
   i18n.py                JSON language packs: built-in `assets/lang` + user `lang\`
   icon.py                generated application icon
+  screen.py              monitor geometry helpers (clamp a point / widget on-screen)
+  textfmt.py             small number / text formatters shared by UI modules
+  debug.py               opt-in file logging (`VEXRUSH_DEBUG`)
 assets/fonts/            ChillRoundM.otf + its OFL licence text
 assets/lang/             zh_cn.json, en_us.json, example.json
 tests/, tools/           test suites and developer tools
 ```
+
+## How the window behaves
+
+* Dragging the title bar is taken over by the program: the window eases toward the cursor
+  and snaps into place on release. Turn it off with **Settings → Window easing**.
+  Double-clicking the title bar still maximises / restores.
+* Resizing keeps the native instant feedback; the automatic height fitting is paused while
+  the mouse is down and reapplied 240 ms after you let go.
+* Hotkeys are registered twice — a low-level keyboard hook plus `RegisterHotKey` — so they
+  keep working when a window of another program (or an elevated one) has focus.
+* Changing the theme is covered by a blurred full-screen curtain while the stylesheet is
+  rebuilt, then fades out with the new colours.
 
 ## Licence
 

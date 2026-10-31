@@ -210,14 +210,14 @@ def test_window() -> None:
     check("连点显示可开启", cfg.overlay.enabled is True and window.overlay.isVisible())
 
     window.btn_overlay.setChecked(False)
-    _pump()
+    _pump(50)                                                  # 出场动画要跑完才隐藏
     check("连点显示可关闭", cfg.overlay.enabled is False and not window.overlay.isVisible())
 
     dialog = window._ensure_settings()                         # noqa: SLF001
     dialog.show()
     _pump()
     dialog.seg_theme.set_value("dark", emit=True)
-    _pump(30)                                                  # 换主题走遮罩，稍等一下
+    _pump(45)                                                  # 换主题走幕布，稍等一下
     check("设置里换主题生效", cfg.appearance.theme == "dark"
           and window.tokens.get("canvas") == theme_mod.THEMES["dark"]["canvas"],
           window.tokens.get("canvas", "?"))

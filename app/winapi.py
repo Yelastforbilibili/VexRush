@@ -678,6 +678,25 @@ def set_app_user_model_id(app_id: str = "VexRush.Clicker.1") -> None:
         pass
 
 
+WM_HOTKEY = 0x0312
+MOD_NOREPEAT = 0x4000
+
+
+def register_hotkey(hwnd: int, hotkey_id: int, vk: int) -> bool:
+    """注册系统级热键：即使焦点在别的程序、甚至全局钩子被拦，也能收到 WM_HOTKEY。"""
+    try:
+        return bool(USER32.RegisterHotKey(int(hwnd), int(hotkey_id), MOD_NOREPEAT, int(vk)))
+    except Exception:
+        return False
+
+
+def unregister_hotkey(hwnd: int, hotkey_id: int) -> None:
+    try:
+        USER32.UnregisterHotKey(int(hwnd), int(hotkey_id))
+    except Exception:
+        pass
+
+
 def bring_to_front(hwnd) -> None:
     if not hwnd or win32gui is None:
         return
