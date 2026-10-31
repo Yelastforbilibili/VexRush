@@ -212,6 +212,13 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         self.update()
 
     def apply_config(self) -> None:
+        self._loading_config = True
+        try:
+            self._apply_config_inner()
+        finally:
+            self._loading_config = False
+
+    def _apply_config_inner(self) -> None:
         self.apply_theme()
         self._refresh_targets(self.cfg.target_process, autodetect=self.cfg.auto_detect)
         self.btn_overlay.blockSignals(True)
@@ -435,7 +442,9 @@ class MainWindow(CaptionDragMixin, QMainWindow):
 
     # ------------------------------------------------------------- 防卡手
     def _on_card_enabled(self, index: int, enabled: bool) -> None:
-        if self._applying_lock:
+        if self._applying_lock or getattr(self, "_loading_config", False):
+            # 程序自己在铺配置（启动 / 导入 / 切换语言重建）时不要触发防卡手：
+            # 用户存下来的开关状态应该原样恢复，不能一启动就互相踢。
             return
         if enabled:
             if not self.cfg.exclusive:

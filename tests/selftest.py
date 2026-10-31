@@ -714,6 +714,70 @@ def test_overlay_drag_stability() -> None:
     dialog.close()
 
 
+
+@test
+def test_overlay_glide_range() -> None:
+    """松手后不能再「溜」：慢拖 0px、快甩不超过 GLIDE_MAX_DISTANCE、关掉惯性 0px。"""
+    from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+    from PyQt5.QtGui import QMouseEvent
+
+    check("惯性上限被收紧（<=20px）", overlay_mod.GLIDE_MAX_DISTANCE <= 20.0,
+          "%.0f" % overlay_mod.GLIDE_MAX_DISTANCE)
+    check("只有真甩才触发惯性（>=300px/s）", overlay_mod.GLIDE_MIN_SPEED >= 300.0,
+          "%.0f" % overlay_mod.GLIDE_MIN_SPEED)
+
+    def run_drag(steps, step_px, delay, inertia):
+        cfg = cfg_mod.OverlayConfig()
+        cfg.drag_inertia = inertia
+        cfg.enabled = True
+        widget = overlay_mod.OverlayWindow(cfg, {})
+        widget.set_tokens(theme_mod.resolve_tokens("light", "blue", "normal"))
+        widget.set_rows([{"title": "连点1", "enabled": True, "clicking": False,
+                          "cps": 0.0, "count": 0, "interval": 15}])
+        widget._rebuild_fonts()
+        widget._relayout(force=True)
+        # 起点放左边一点：离屏平台只有 768x576，别让窗口贴边被夹回来
+        widget.move(120, 120)
+        widget.show()
+        _pump()
+        app = QApplication.instance()
+
+        def mouse(kind, gpos, buttons):
+            local = gpos - widget.pos()
+            return QMouseEvent(kind, QPointF(local), QPointF(gpos), Qt.LeftButton, buttons, Qt.NoModifier)
+
+        point = widget.pos() + QPoint(30, 20)
+        widget._mousePressEvent(mouse(QEvent.MouseButtonPress, point, Qt.LeftButton))
+        for _ in range(steps):
+            point = point + QPoint(step_px, step_px // 2)
+            widget._mouseMoveEvent(mouse(QEvent.MouseMove, point, Qt.LeftButton))
+            end = time.perf_counter() + delay
+            while time.perf_counter() < end:
+                app.processEvents()
+                time.sleep(0.004)
+        widget._mouseReleaseEvent(mouse(QEvent.MouseButtonRelease, point, Qt.NoButton))
+        released = widget.pos()
+        end = time.perf_counter() + 0.8
+        while time.perf_counter() < end:
+            app.processEvents()
+            time.sleep(0.004)
+        drift = (widget.pos() - released).manhattanLength()
+        if os.environ.get("VEXRUSH_GLIDE_DEBUG"):
+            print("    [glide] released=%s final=%s budget=%.1f"
+                  % (released, widget.pos(), widget._glide_left))
+        widget.close()
+        _pump()
+        return drift
+
+    slow = run_drag(10, 4, 0.03, True)
+    flick = run_drag(6, 16, 0.012, True)
+    off = run_drag(6, 16, 0.012, False)
+    check("慢慢拖：松手就是落点", slow <= 1, "%d px" % slow)
+    check("快甩：溜出去不超过上限", flick <= overlay_mod.GLIDE_MAX_DISTANCE + 2,
+          "%d px" % flick)
+    check("关掉惯性：松手不动", off <= 1, "%d px" % off)
+
+
 def main() -> int:
     from app import icon as icon_mod
     import main as entry

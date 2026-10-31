@@ -33,8 +33,11 @@ META_GAP = 9.0
 DIVIDER_GAP = 9.0
 
 CHANNEL_LABELS = ("click_1", "click_2")
-GLIDE_MAX_SPEED = 1100.0      # 松手惯性最高速度，防止一甩飞出屏幕
-GLIDE_DECAY = 7.5             # 惯性衰减系数，越大停得越快
+GLIDE_MAX_SPEED = 280.0       # 松手惯性的起始速度上限（px/s），越小越"不溜"
+GLIDE_DECAY = 20.0            # 惯性衰减系数，越大停得越快
+GLIDE_MAX_DISTANCE = 16.0     # 惯性最多再走这么多像素就强制停住
+GLIDE_MIN_SPEED = 420.0       # 只有真的「甩」起来才有惯性，慢慢拖停手即定
+GLIDE_STOP_SPEED = 55.0       # 衰减到这个速度以下就收尾
 
 
 def _meta_sample(cfg: OverlayConfig) -> str:
@@ -75,6 +78,8 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
         self._drag_target: Optional[QPoint] = None
         self._drag_active = False
         self._vel = QPointF(0.0, 0.0)
+        self._glide_left = 0.0
+        self._glide_pos = None       # 惯性用的浮点位置
         self._samples = deque(maxlen=10)
         self._anim_t = 1.0
         self._anim_kind = "in"
@@ -339,23 +344,44 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
                 settled = False
 
         if not self._drag_active and (abs(self._vel.x()) > 1.0 or abs(self._vel.y()) > 1.0):
-            current = self.pos()
-            wanted = QPoint(int(round(current.x() + self._vel.x() * dt)),
-                            int(round(current.y() + self._vel.y() * dt)))
+            # 用浮点位置累计惯性位移：帧长抖动不会让「走多了/走少了」累积误差，
+            # 额度用完就是真的用完，不会偷偷多溜几个像素。
+            if self._glide_pos is None:
+                self._glide_pos = QPointF(self.x(), self.y())
+            step_x = self._vel.x() * dt
+            step_y = self._vel.y() * dt
+            step = math.hypot(step_x, step_y)
+            if step > self._glide_left:
+                scale = (self._glide_left / step) if step > 0.0 else 0.0
+                step_x *= scale
+                step_y *= scale
+                step = max(0.0, self._glide_left)
+            nx = self._glide_pos.x() + step_x
+            ny = self._glide_pos.y() + step_y
+            wanted = QPoint(int(round(nx)), int(round(ny)))
             area = screen_mod.screen_of(self)
             limited = screen_mod.clamp_point(wanted, (self.width(), self.height()), area)
             if limited.x() != wanted.x():       # 撞到屏幕边就把横向速度归零
                 self._vel = QPointF(0.0, self._vel.y())
+                nx = float(limited.x())
             if limited.y() != wanted.y():
                 self._vel = QPointF(self._vel.x(), 0.0)
-            if limited != current:
+                ny = float(limited.y())
+            self._glide_pos = QPointF(nx, ny)
+            if limited != self.pos():
                 self.move(limited)
+            self._glide_left -= step
             decay = math.exp(-dt * GLIDE_DECAY)
             self._vel = QPointF(self._vel.x() * decay, self._vel.y() * decay)
-            if abs(self._vel.x()) < 30.0 and abs(self._vel.y()) < 30.0:
+            speed = math.hypot(self._vel.x(), self._vel.y())
+            if (speed < GLIDE_STOP_SPEED or self._glide_left <= 0.0
+                    or not self.cfg.drag_inertia):
                 self._vel = QPointF(0.0, 0.0)
+                self._glide_left = 0.0
+                self._glide_pos = None
                 self.positionChanged.emit(self.save_position())
-            settled = False
+            else:
+                settled = False
 
         self.update()
         if settled and not self._needs_frames():
@@ -559,6 +585,8 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
 
     def _mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and not self.cfg.locked:
+            self._glide_left = 0.0
+            self._glide_pos = None
             self._drag_offset = event.globalPos() - self.frameGeometry().topLeft()
             self._drag_target = self.pos()
             self._drag_active = True
@@ -610,11 +638,14 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
         if self._drag_offset is not None:
             self._drag_offset = None
             self._drag_active = False
-            # 松手不要瞬移到鼠标位置：缓动会自己把最后一点路走完，
-            # 之后再带一点点惯性滑停（幅度很小，且始终夹在屏幕里）。
+            # 松手先「指哪停哪」：缓动可能还差几像素没跟上，落地时补齐，
+            # 这样精调位置不会差一点（之后才谈惯性，而且只在小范围内）。
+            target = self._drag_target
             self._drag_target = None
+            if target is not None and target != self.pos():
+                self.move(target)
             speed = math.hypot(self._vel.x(), self._vel.y())
-            if not self.cfg.drag_inertia or speed < 45.0:
+            if not self.cfg.drag_inertia or speed < GLIDE_MIN_SPEED:
                 self._vel = QPointF(0.0, 0.0)
                 self.positionChanged.emit(self.save_position())
             else:
@@ -622,6 +653,8 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
                 if speed > limit:
                     self._vel = QPointF(self._vel.x() / speed * limit,
                                         self._vel.y() / speed * limit)
+                self._glide_left = GLIDE_MAX_DISTANCE
+                self._glide_pos = QPointF(float(self.x()), float(self.y()))
                 self._start_frames()
             event.accept()
             return

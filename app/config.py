@@ -20,7 +20,7 @@ from .i18n import tr
 APP_NAME = "VexRush"
 APP_ID = "VexRush.Clicker.1"
 GITHUB_URL = "https://github.com/Yelastforbilibili/VexRush"
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.2.2"
 CONFIG_NAME = "config.json"
 CONFIG_VERSION = 2
 
@@ -140,7 +140,7 @@ class ChannelConfig:
     trigger_mouse: str = "left"
     trigger_key: str = ""
     sim_mouse: str = "left"
-    hotkey: str = "f1"
+    hotkey: str = "x"
     enabled: bool = False
 
     def normalize(self, index: int) -> "ChannelConfig":
@@ -157,7 +157,7 @@ class ChannelConfig:
             self.trigger_kind = "mouse"
         if not self.trigger_key:
             self.trigger_kind = "mouse"
-        self.hotkey = canon_key(str(self.hotkey or "")[:24]) or ("f1" if index == 0 else "f2")
+        self.hotkey = canon_key(str(self.hotkey or "")[:24]) or ("x" if index == 0 else "r")
         self.trigger_key = canon_key(str(self.trigger_key or ""))
         self.enabled = bool(self.enabled)
         return self
@@ -187,8 +187,8 @@ class ChannelConfig:
 
 
 def default_channels() -> List[ChannelConfig]:
-    first = ChannelConfig(name="连点1", trigger_mouse="left", sim_mouse="left", hotkey="f1")
-    second = ChannelConfig(name="连点2", trigger_mouse="right", sim_mouse="right", hotkey="f2")
+    first = ChannelConfig(name="连点1", interval_ms=15, trigger_mouse="left", sim_mouse="left", hotkey="x")
+    second = ChannelConfig(name="连点2", interval_ms=15, trigger_mouse="right", sim_mouse="right", hotkey="r")
     return [first, second]
 
 
@@ -273,8 +273,8 @@ class OverlayConfig:
     rainbow: bool = True
     rainbow_speed: int = 45        # 色相每步耗时 ms
     animation: str = "fade"        # 状态变化的过渡：fade | slide | pulse | none
-    anim_in: str = "fade"          # 入场动画
-    anim_out: str = "fade"         # 出场动画
+    anim_in: str = "spring"        # 入场动画
+    anim_out: str = "blur"         # 出场动画
     drag_smooth: bool = True       # 拖动时插值跟手
     drag_ease: int = 22            # 跟手速度（越大越贴手）
     drag_inertia: bool = True      # 松手后带一点惯性滑行
@@ -305,8 +305,8 @@ class OverlayConfig:
         self.rainbow = bool(self.rainbow)
         self.rainbow_speed = _clamp_int(self.rainbow_speed, 16, 200, 45)
         self.animation = _pick(self.animation, {"fade", "slide", "pulse", "none"}, "fade")
-        self.anim_in = _pick(self.anim_in, OVERLAY_ANIMS, "fade")
-        self.anim_out = _pick(self.anim_out, OVERLAY_ANIMS, "fade")
+        self.anim_in = _pick(self.anim_in, OVERLAY_ANIMS, "spring")
+        self.anim_out = _pick(self.anim_out, OVERLAY_ANIMS, "blur")
         self.drag_smooth = bool(self.drag_smooth)
         self.drag_ease = _clamp_int(self.drag_ease, 6, 60, 22)
         self.drag_inertia = bool(self.drag_inertia)
@@ -334,8 +334,8 @@ class AppConfig:
     target_process: str = ""
     send_mode: str = "post"        # post | send
     auto_detect: bool = True
-    exclusive: bool = False        # 防卡手：同一时间只允许一路开启
-    restore_previous: bool = True  # 防卡手：关闭后恢复上一路
+    exclusive: bool = True         # 防卡手：同一时间只允许一路开启
+    restore_previous: bool = False  # 防卡手：关闭后恢复上一路
     ignore_ime: bool = False        # 在输入框里打字时不响应热键与键盘触发
     smooth_window: bool = True     # 拖动边框/标题栏时窗口缓动跟随鼠标
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)

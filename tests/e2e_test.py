@@ -190,6 +190,10 @@ def write_test_config():
     cfg.send_mode = "post"
     cfg.auto_detect = False
     cfg.geometry = ""
+    # 这轮测的是「两路互不影响 + 热键 + 真实鼠标」，防卡手那种「只能开一路」的
+    # 行为在 selftest 里单独测，这里必须关掉，否则热键一拨就把另一路踢掉了。
+    cfg.exclusive = False
+    cfg.restore_previous = False
 
     left = cfg.channels[0]
     left.enabled = True
