@@ -874,12 +874,28 @@ class MainWindow(QMainWindow):
 
     def _caption_start(self) -> bool:
         """标题栏按下：接管拖动。返回 True 表示已经处理，不再走系统默认。"""
+        try:
+            cursor = win32api.GetCursorPos()
+        except Exception:
+            return False
+        # 双击标题栏要能最大化/还原：系统会在第一次按下后等第二次按下才算双击，
+        # 但第一次按下已经被我们接管了，所以自己判断「短时间内几乎没动的第二次按下」。
+        last = getattr(self, "_last_click", None)
+        if last is not None:
+            stamp, spot = last
+            if (time.perf_counter() - stamp < 0.45
+                    and abs(cursor[0] - spot[0]) <= 6 and abs(cursor[1] - spot[1]) <= 6):
+                self._last_click = None
+                if self.isMaximized():
+                    self.showNormal()
+                else:
+                    self.showMaximized()
+                return True
         if self.isMaximized() or self.isFullScreen():
             return False
         try:
             hwnd = int(self.winId())
             rect = win32gui.GetWindowRect(hwnd)
-            cursor = win32api.GetCursorPos()
         except Exception:
             return False
         for name in ("_fit_timer", "_squeeze_timer"):
@@ -890,6 +906,8 @@ class MainWindow(QMainWindow):
         if anim is not None:
             anim.stop()
         self._drag_grab = (cursor[0] - rect[0], cursor[1] - rect[1])
+        self._drag_origin = (rect[0], rect[1])
+        self._last_click = None
         self._drag_pos = [float(rect[0]), float(rect[1])]
         self._drag_target = (float(rect[0]), float(rect[1]))
         self._drag_stamp = time.perf_counter()
@@ -971,6 +989,16 @@ class MainWindow(QMainWindow):
                 pass
         self._caption_drag = False
         self._drag_active = False
+        try:
+            cursor = win32api.GetCursorPos()
+        except Exception:
+            cursor = None
+        origin = getattr(self, "_drag_origin", None)
+        if snap and cursor is not None and origin is not None:
+            if abs(cursor[0] - origin[0]) <= 4 and abs(cursor[1] - origin[1]) <= 4:
+                self._last_click = (time.perf_counter(), cursor)
+        else:
+            self._last_click = None
         self._drag_log("end snap=%s target=%s" % (snap, getattr(self, "_drag_target", None)))
         self.mark_dirty()
         QTimer.singleShot(70, lambda: self._fit_height(allow_shrink=False, animate=True))
