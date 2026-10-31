@@ -1,0 +1,13 @@
+﻿__pycache__/
+*.pyc
+build/
+dist/
+dist_probe/
+build_probe/
+_tmp/
+_bak_*/
+_font/
+_v1/
+config.json
+__*
+_*
