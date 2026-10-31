@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QMenu
+from PyQt5.QtWidgets import QMenu, QWidget
 
+from .config import OverlayConfig
 from .i18n import tr
 
 

@@ -583,13 +583,17 @@ def test_settings_split() -> None:
 
     main_dialog.sw_exclusive.setChecked(True)
     main_dialog.sw_restore.setChecked(False)
-    main_dialog.sw_ime.setChecked(False)
     _pump()
     check("设置里能开防卡手并关掉恢复",
           cfg.exclusive and not cfg.restore_previous,
           "exclusive=%s restore=%s" % (cfg.exclusive, cfg.restore_previous))
-    check("关掉输入法开关会同步到监听", not cfg.ignore_ime and not window.hub.ignore_ime,
-          "cfg=%s hub=%s" % (cfg.ignore_ime, window.hub.ignore_ime))
+    # 「打字时不响应」暂时下线：控件可见但变灰，配置恒为关
+    check("输入法开关已下线（变灰且关着）",
+          not main_dialog.sw_ime.isEnabled() and not cfg.ignore_ime
+          and not window.hub.ignore_ime and not window.shared.ime_guard,
+          "enabled=%s cfg=%s hub=%s guard=%s"
+          % (main_dialog.sw_ime.isEnabled(), cfg.ignore_ime,
+             window.hub.ignore_ime, window.shared.ime_guard))
     window.close()
 
 
@@ -657,9 +661,57 @@ def test_window_easing_and_lang() -> None:
           not (dialog.windowFlags() & Qt.WindowContextHelpButtonHint))
     check("设置窗有 GitHub 按钮", cfg_mod.GITHUB_URL.endswith("/VexRush"))
     check("拖动首帧插值有上限",
-          "min(0.45" in inspect.getsource(overlay_mod.OverlayWindow._on_frame),
+          "min(0.45" in inspect.getsource(overlay_mod.OverlayWindow._tick_frame),
           "k 上限 45%")
     window.close()
+
+
+@test
+def test_overlay_drag_stability() -> None:
+    """悬浮窗拖动整条路不能抛异常（3.2.0 就是松手时 NameError 把程序带崩的）。"""
+    from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt
+    from PyQt5.QtGui import QMouseEvent
+
+    cfg = cfg_mod.AppConfig().normalize()
+    cfg.overlay.enabled = True
+    dialog = overlay_mod.OverlayWindow(cfg.overlay, {})
+    dialog.set_tokens(theme_mod.resolve_tokens("light", "blue", "normal"))
+    dialog.set_rows([
+        {"title": "连点1", "enabled": True, "clicking": True,
+         "cps": 66.4, "count": 12, "interval": 15},
+    ])
+    dialog.move(300, 200)
+    dialog.show()
+    _pump()
+
+    from app import screen as screen_mod
+
+    def mouse(kind, gpos, buttons):
+        local = gpos - dialog.pos()
+        return QMouseEvent(kind, QPointF(local), QPointF(gpos), Qt.LeftButton, buttons, Qt.NoModifier)
+
+    errors = []
+    original_hook = sys.excepthook
+    sys.excepthook = lambda *args: errors.append(args[1])
+    start = dialog.pos()
+    try:
+        dialog.mousePressEvent(mouse(QEvent.MouseButtonPress, start + QPoint(12, 10), Qt.LeftButton))
+        for step in range(1, 13):
+            dialog.mouseMoveEvent(mouse(QEvent.MouseMove, start + QPoint(12 + step * 16, 10 + step * 6),
+                                        Qt.LeftButton))
+            _pump(2)
+        released = start + QPoint(12 + 12 * 16, 10 + 12 * 6)
+        dialog.mouseReleaseEvent(mouse(QEvent.MouseButtonRelease, released, Qt.NoButton))
+        for _ in range(60):                   # 让惯性跑完
+            _pump(1)
+    finally:
+        sys.excepthook = original_hook
+    check("拖动悬浮窗全程不抛异常", not errors, "错误=%s" % (errors[:1],))
+    area = screen_mod.screen_of(dialog)
+    check("拖动结束时位置被夹在可见区域",
+          area.contains(dialog.geometry()) or area.intersects(dialog.geometry()),
+          "pos=%s area=%s" % (dialog.pos(), area))
+    dialog.close()
 
 
 def main() -> int:

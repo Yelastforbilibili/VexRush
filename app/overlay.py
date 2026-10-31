@@ -20,6 +20,7 @@ from . import winapi
 from .config import OverlayConfig
 from .widgets import set_tokens as _set_global_tokens
 from .widgets import tk
+from . import debug
 from . import screen as screen_mod
 from .i18n import tr
 from .overlay_anim import OverlayAnimMixin
@@ -32,6 +33,8 @@ META_GAP = 9.0
 DIVIDER_GAP = 9.0
 
 CHANNEL_LABELS = ("click_1", "click_2")
+GLIDE_MAX_SPEED = 1100.0      # 松手惯性最高速度，防止一甩飞出屏幕
+GLIDE_DECAY = 7.5             # 惯性衰减系数，越大停得越快
 
 
 def _meta_sample(cfg: OverlayConfig) -> str:
@@ -277,6 +280,14 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
             self._timer.start()
 
     def _on_frame(self) -> None:
+        try:
+            self._tick_frame()
+        except Exception:                      # noqa: BLE001
+            # 帧循环里任何异常都不该把整个程序带走：记下来、停下定时器
+            debug.log("overlay", "frame error: %s" % (sys.exc_info()[1],))
+            self._timer.stop()
+
+    def _tick_frame(self) -> None:
         now = time.perf_counter()
         dt = max(0.001, min(0.05, now - self._last_frame))
         self._last_frame = now
@@ -541,6 +552,12 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
 
     # ------------------------------------------------------------ 鼠标
     def mousePressEvent(self, event) -> None:
+        try:
+            self._mousePressEvent(event)
+        except Exception:                  # noqa: BLE001
+            debug.log("overlay", "mousePressEvent error: %s" % (sys.exc_info()[1],))
+
+    def _mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and not self.cfg.locked:
             self._drag_offset = event.globalPos() - self.frameGeometry().topLeft()
             self._drag_target = self.pos()
@@ -554,6 +571,12 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        try:
+            self._mouseMoveEvent(event)
+        except Exception:                  # noqa: BLE001
+            debug.log("overlay", "mouseMoveEvent error: %s" % (sys.exc_info()[1],))
+
+    def _mouseMoveEvent(self, event) -> None:
         if self._drag_offset is not None and event.buttons() & Qt.LeftButton:
             target = event.globalPos() - self._drag_offset
             now = time.perf_counter()
@@ -578,6 +601,12 @@ class OverlayWindow(OverlayAnimMixin, QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        try:
+            self._mouseReleaseEvent(event)
+        except Exception:                  # noqa: BLE001
+            debug.log("overlay", "mouseReleaseEvent error: %s" % (sys.exc_info()[1],))
+
+    def _mouseReleaseEvent(self, event) -> None:
         if self._drag_offset is not None:
             self._drag_offset = None
             self._drag_active = False

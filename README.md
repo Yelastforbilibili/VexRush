@@ -19,8 +19,9 @@ target does not have to be in the foreground.
   hotkey per channel.
 - **Foreground guard**: while the VexRush window itself is focused it never clicks
   outwards, so pressing a button in the UI cannot fire into the game.
-- **Typing / IME guard** (optional): while the foreground window shows a visible caret or
-  the IME is composing text, neither the hotkeys nor the mouse triggers react.
+- **Typing / IME guard**: shown in Settings but **disabled (coming soon)**. Detecting "is this
+  an input box / is the IME composing" reliably is not possible across Win32, Scintilla, TSF
+  and Chromium apps, so the option stays off and locked instead of pretending to work.
 - **Exclusive mode** (防卡手): turning one channel on turns the other off, and turning it
   back off restores only the channel it replaced — one slot only, so repeated swaps never
   resurrect the wrong channel.
@@ -60,8 +61,8 @@ Everything is saved automatically, including the window position.
   input through DirectInput / Raw Input ignore these messages by design.
 - If the target runs elevated, VexRush must run elevated too, otherwise UIPI blocks the
   messages.
-- Chromium-based apps sometimes paint their own text caret, so the typing guard may not
-  detect them.
+- The typing/IME guard is deliberately unavailable: there is no dependable cross-program way
+  to tell a text caret from a decorated one.
 
 ## Translating
 
@@ -93,7 +94,7 @@ python -m PyInstaller --noconfirm --clean dual_clicker.spec
 Tests (Windows only — they create real windows and send real input):
 
 ```bat
-python tests\selftest.py     :: config, theme, i18n, HUD geometry, IME gate, message posting
+python tests\selftest.py     :: config, theme, i18n, HUD geometry/drag, message posting
 python tests\e2e_test.py     :: end-to-end against a throwaway target window
 python tests\exe_check.py    :: packaged exe: high DPI, config round-trip, restore
 

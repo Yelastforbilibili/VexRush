@@ -176,9 +176,25 @@ class SettingsDialog(SectionDialog):
         self.sw_smooth.toggled.connect(self._on_smooth)
 
         box = self._section(tr("ime"), "ime")
-        self.sw_ime = self._switch_row(box, tr("ignore_while_typing"),
-                                       tr("while_the_caret_is_in_a_text_field_or_th"))
-        self.sw_ime.toggled.connect(self._on_ime)
+        # 这一项暂时下线：输入框/输入法的判定在各家程序里都不可靠，做不干净就先别给用户。
+        # 保持可见但整行变灰，写清「敬请期待」，避免用户以为是自己没设置对。
+        row = QWidget(self)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(10)
+        row_layout.addWidget(w.label(tr("ignore_while_typing"), "FieldLabel"))
+        badge = w.label(tr("coming_soon"), "Hint")
+        row_layout.addWidget(badge)
+        row_layout.addStretch(1)
+        self.sw_ime = w.Switch(parent=self)
+        self.sw_ime.setChecked(False)
+        self.sw_ime.setEnabled(False)
+        row_layout.addWidget(self.sw_ime)
+        row.setEnabled(False)
+        box.addWidget(row)
+        hint = self._hint_label(tr("ime_unavailable_hint"), self)
+        hint.setEnabled(False)
+        box.addWidget(hint)
 
         box = self._section(tr("hud"), "overlay")
         row = QWidget(self)
@@ -220,12 +236,6 @@ class SettingsDialog(SectionDialog):
         if self._loading:
             return
         self.cfg.smooth_window = bool(checked)
-        self._commit("general")
-
-    def _on_ime(self, checked: bool) -> None:
-        if self._loading:
-            return
-        self.cfg.ignore_ime = bool(checked)
         self._commit("general")
 
     # ------------------------------------------------------------ 配置文件
@@ -332,7 +342,7 @@ class SettingsDialog(SectionDialog):
             self.cb_mode.select_data(self.cfg.send_mode)
             self.sw_exclusive.setChecked(self.cfg.exclusive)
             self.sw_restore.setChecked(self.cfg.restore_previous)
-            self.sw_ime.setChecked(self.cfg.ignore_ime)
+            self.sw_ime.setChecked(False)          # 功能下线，恒为关
             self.sw_smooth.setChecked(self.cfg.smooth_window)
             self.cb_font.select_data(self.cfg.appearance.font_family)
             self.seg_lang.set_value(self.cfg.appearance.language)

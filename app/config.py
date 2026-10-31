@@ -20,7 +20,7 @@ from .i18n import tr
 APP_NAME = "VexRush"
 APP_ID = "VexRush.Clicker.1"
 GITHUB_URL = "https://github.com/Yelastforbilibili/VexRush"
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 CONFIG_NAME = "config.json"
 CONFIG_VERSION = 2
 
@@ -336,7 +336,7 @@ class AppConfig:
     auto_detect: bool = True
     exclusive: bool = False        # 防卡手：同一时间只允许一路开启
     restore_previous: bool = True  # 防卡手：关闭后恢复上一路
-    ignore_ime: bool = True        # 在输入框里打字时不响应热键与键盘触发
+    ignore_ime: bool = False        # 在输入框里打字时不响应热键与键盘触发
     smooth_window: bool = True     # 拖动边框/标题栏时窗口缓动跟随鼠标
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
@@ -351,7 +351,8 @@ class AppConfig:
         self.auto_detect = bool(self.auto_detect)
         self.exclusive = bool(self.exclusive)
         self.restore_previous = bool(self.restore_previous)
-        self.ignore_ime = bool(self.ignore_ime)
+        # 输入框/输入法的判定在各家程序里都不可靠，功能暂时下线，强制关闭
+        self.ignore_ime = False
         self.smooth_window = bool(self.smooth_window)
         self.appearance = (self.appearance or AppearanceConfig()).normalize()
         self.overlay = (self.overlay or OverlayConfig()).normalize()

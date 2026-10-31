@@ -394,39 +394,8 @@ def _focused_child(hwnd) -> int:
     return int(hwnd)
 
 
-# 输入框类名里的关键字：只有这些控件上的光标才算“在输入框里”。
-# 桌面/列表视图之类偶尔会留下一个“幽灵光标”，必须排除掉，否则热键会失效。
-_TEXT_CLASS_HINTS = (
-    "edit", "richedit", "scintilla", "textbox", "textfield", "textedit", "text_area",
-    "chrome_widgetwin", "mozillawindowclass", "internet explorer_server", "windows.ui.core",
-    "qt5", "qt6", "sunawtframe", "consolewindowclass", "notepad", "sublime_text",
-    "vscode", "electron", "cef", "clion", "jetbrains", "terminal", "mintty", "windowsterminal",
-    "vkedit", "browser", "webview",
-)
-
-# 这些类名一定不是输入框（桌面、任务栏、各种列表）。
-_NOT_TEXT_CLASSES = (
-    "progman", "workerw", "shelldll_defview", "syslistview32", "directuihwnd",
-    "shell_traywnd", "shelltabwnd", "tasklistthumnail", "dv2controlhost",
-    "tooltips_class32", "msctfime ui", "ime", "default ime",
-)
-
-
-def _looks_like_text_class(class_name: str) -> bool:
-    lowered = (class_name or "").strip().lower()
-    if not lowered:
-        return False
-    for skip in _NOT_TEXT_CLASSES:
-        if skip in lowered:
-            return False
-    for hint in _TEXT_CLASS_HINTS:
-        if hint in lowered:
-            return True
-    return False
-
-
 def caret_visible() -> bool:
-    """前台窗口里是否有文字光标，并且它长在输入类控件上。"""
+    """前台窗口里有没有文字光标（hwndCaret 非空且 rcCaret 有面积）。"""
     hwnd = foreground_window()
     if not hwnd:
         return False
@@ -439,17 +408,7 @@ def caret_visible() -> bool:
     if info is None or not info.hwndCaret:
         return False
     rc = info.rcCaret
-    if (rc.right - rc.left) <= 0 or (rc.bottom - rc.top) <= 0:
-        return False
-    owner = int(info.hwndCaret or 0)
-    focus = int(info.hwndFocus or 0)
-    if _looks_like_text_class(window_class(owner)):
-        return True
-    if focus and focus != owner and _looks_like_text_class(window_class(focus)):
-        return True
-    # 光标在自己的子窗口里、但类名认不出来时，看它的父窗口类名
-    parent = USER32.GetParent(owner) if owner else 0
-    return bool(parent) and _looks_like_text_class(window_class(parent))
+    return (rc.right - rc.left) > 0 and (rc.bottom - rc.top) > 0
 
 
 _typing_cache = {"at": 0.0, "value": False}
@@ -458,6 +417,9 @@ _TYPING_TTL = 0.12
 
 def text_input_active() -> bool:
     """前台是否正在文字输入（有光标或输入法拼字中）。
+
+    注意：这个判断只在「打字时不响应」开关打开时才会被调用，而那个开关目前默认
+    关闭（见 settings.py 的「敬请期待」说明）。
 
     结果缓存 120ms：连点线程每 1ms 都可能问一次，不能每次都走 Win32。
     """
