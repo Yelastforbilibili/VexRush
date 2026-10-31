@@ -623,33 +623,25 @@ def test_window_easing_and_lang() -> None:
     window.move(140, 100)
     window.resize(700, 380)
     _pump()
-    # 窗口缓动：全程物理像素，只改 lParam 里的矩形（自己不动窗口）
-    # offscreen 平台没有真实窗口句柄，这里直接喂一组物理像素坐标验证换算逻辑；
-    # 真窗口那条路径由 __probe_ease2.py / e2e 覆盖。
-    offscreen = QApplication.platformName() == "offscreen"
-    if offscreen:
-        start = [100, 100, 900, 500]
-        window._ease_pos = [float(v) for v in start]
-        window._ease_stamp = time.perf_counter() - 0.008
-        window._drag_active = True
-    else:
-        window._ease_reset()
-        start = list(win32gui.GetWindowRect(int(window.winId())))
-    probe = (ctypes.c_long * 4)(start[0] + 300, start[1] + 200,
-                                start[2] + 300, start[3] + 200)
-    window._ease_stamp = time.perf_counter() - 0.008
-    ok_ease = window._ease_apply(ctypes.addressof(probe))
-    step_x = int(probe[0])
-    check("窗口缓动接管了消息并把矩形往目标挪", ok_ease and start[0] < step_x < start[0] + 300,
-          "%d -> %d（目标 %d）" % (start[0], step_x, start[0] + 300))
-    moved = [int(v) for v in probe]
-    inside = all(start[i] <= moved[i] <= start[i] + (300 if i in (0, 2) else 200)
-                 for i in range(4))
-    check("缓动没有回头、也没有过冲", inside,
-          "起点 %s -> 现在 %s" % (start, moved))
-    window._ease_end()
+    # 拖动缓动是自己接管标题栏（原生模态循环里做插值会让窗口以 k 倍速度爬行，
+    # 实测 k≈0.34 时光标走 240px 窗口只走 82px，所以不能走那条路）。
+    # offscreen 平台没有真实窗口句柄，这里只验证状态机与互斥守卫；
+    # 「缓动跟手 + 松手吸附」由 __probe_drag3/4.py 用真窗口真鼠标验证。
+    for name in ("_caption_start", "_caption_step", "_caption_end", "filter_native"):
+        check("拖动实现有 %s" % name, hasattr(window, name))
+    check("拖动前不在拖动状态", not window._caption_drag)
+    window._drag_active = True
+    height_before = window.height()
+    window._fit_height(allow_shrink=True, animate=True)
+    window._spring_back_width()
     _pump(20)
-    check("松手后退出拖动状态", not getattr(window, "_drag_active", True))
+    check("拖动期间不做高度贴合", window.height() == height_before,
+          "%d -> %d" % (height_before, window.height()))
+    window._drag_active = False
+    window._caption_drag = False
+    window._caption_end(snap=False)
+    _pump(20)
+    check("松手后退出拖动状态", not window._caption_drag)
 
     window.resize(500, 300)
     _pump(40)

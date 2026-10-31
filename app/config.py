@@ -20,7 +20,7 @@ from .i18n import tr
 APP_NAME = "VexRush"
 APP_ID = "VexRush.Clicker.1"
 GITHUB_URL = "https://github.com/Yelastforbilibili/VexRush"
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 CONFIG_NAME = "config.json"
 CONFIG_VERSION = 2
 

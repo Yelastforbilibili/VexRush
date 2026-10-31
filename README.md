@@ -39,9 +39,9 @@ target does not have to be in the foreground.
 - **Translations are data, not code**: `lang\*.json` in the data directory. Drop your own
   file in and it shows up in the language list marked *unofficial* — no rebuild needed
   (see [Translating](#translating)).
-- **Smooth window** (optional): while you drag the title bar or the window border the window
-  eases toward the pointer instead of snapping, and the height re-fits its cards after you
-  release.
+- **Smooth window** (optional): dragging the title bar is handled by the app itself — the window
+  eases toward the pointer (same curve as the HUD) and snaps onto it when you release, then the
+  height re-fits its cards. Border resizing stays native so it tracks the pointer exactly.
 - **Single instance**, high-DPI aware (verified at 175 %), no console window.
 
 ## Usage

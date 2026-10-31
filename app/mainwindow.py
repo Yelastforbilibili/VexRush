@@ -5,12 +5,15 @@ import base64
 import ctypes
 import ctypes.wintypes
 import math
+import os
 import time
 from typing import List, Optional
 
+import win32api
 import win32gui
 
-from PyQt5.QtCore import QEasingCurve, QRect, Qt, QTimer, QVariantAnimation, pyqtSignal
+from PyQt5.QtCore import (QAbstractNativeEventFilter, QEasingCurve, QRect, Qt,
+                            QTimer, QVariantAnimation, pyqtSignal)
 from PyQt5.QtGui import QCloseEvent, QShowEvent
 from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLineEdit, QMainWindow,
                              QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
@@ -25,10 +28,46 @@ from .settings import SettingsDialog
 from .i18n import tr
 
 WM_ENTERSIZEMOVE = 0x0231
-WM_SIZING = 0x0214
-WM_MOVING = 0x0216
 WM_EXITSIZEMOVE = 0x0232
-EASE_RATE = 26.0
+WM_NCLBUTTONDOWN = 0x00A1
+WM_NCLBUTTONDBLCLK = 0x00A3
+WM_MOUSEMOVE = 0x0200
+WM_LBUTTONUP = 0x0201
+WM_CAPTURECHANGED = 0x0215
+HTCAPTION = 2
+SWP_NOSIZE = 0x0001
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+DRAG_RATE = 20.0
+USER32 = ctypes.WinDLL("user32", use_last_error=True)
+WM_KEYDOWN = 0x0100
+
+
+class _WindowDragFilter(QAbstractNativeEventFilter):
+    """应用级原生消息钩子。
+
+    为什么要绕这一层：点标题栏产生的是 WM_NCLBUTTONDOWN（非客户区消息），
+    Qt 不会把它转给 QWidget.nativeEvent（实测 nativeEvent 一条都收不到），
+    所以只能在消息进入 Qt 的分发之前拦下来，才能接管拖动。
+    """
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self._window = window
+
+    def nativeEventFilter(self, event_type, message):
+        window = self._window
+        if window is None:
+            return False, 0
+        try:
+            result = window.filter_native(message)
+        except Exception:
+            result = None
+        if result is None:
+            return False, 0
+        return True, result
+
+
 
 SAVE_DELAY_MS = 400
 TICK_MS = 110
@@ -394,6 +433,17 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._busy = w.BusyOverlay(central)
+        self._caption_drag = False
+        self._drag_grab = (0, 0)
+        self._drag_pos = [0.0, 0.0]
+        self._drag_target = None
+        self._drag_stamp = 0.0
+        self._drag_timer = None
+        self._hwnd = 0
+        self._drag_filter = _WindowDragFilter(self)
+        app = QApplication.instance()
+        if app is not None:
+            app.installNativeEventFilter(self._drag_filter)
 
     def _build_cards(self) -> None:
         for channel in self.channels:
@@ -799,50 +849,39 @@ class MainWindow(QMainWindow):
     def _spring_back_width(self) -> None:
         if self.isMaximized() or self.isFullScreen():
             return
+        if getattr(self, "_caption_drag", False) or getattr(self, "_drag_active", False):
+            return
         need = self._min_width_for_cards()
         if self.width() < need:
             self._animate_width(need)
 
-    # ------------------------------------------------- 拖动/缩放时窗口缓动跟随
-    # 关键：lParam 里的 RECT 是「物理像素」，而 Qt 的 geometry 是「逻辑像素」。
-    # 早先版本把物理像素当逻辑像素去 setGeometry，在 175% DPI 下差了 1.75 倍，
-    # 于是窗口在「系统摆的位置」和「我自己摆的位置」之间来回弹 —— 表现就是抽搐。
-    # 现在全程只用物理像素，而且绝不自己摆窗口：只把缓动后的矩形写回 lParam，
-    # 由系统去摆放。只有一个位置源，不可能打架。
-    def nativeEvent(self, event_type, message):
-        """接管 WM_MOVING / WM_SIZING：只调整 lParam 里的矩形，由系统摆放窗口。"""
-        if event_type != b"windows_generic_MSG":
-            return super().nativeEvent(event_type, message)
+    # ------------------------------------------------- 窗口拖动缓动（自己接管标题栏）
+    # 为什么要自己接管：Windows 的拖动是「模态移动循环」，它发来的 WM_MOVING
+    # 里的矩形是相对**当前窗口位置**算出来的增量。在里面做插值只会让窗口
+    # 以 k 倍速度爬行（实测 k≈0.34 时，光标走 240px 窗口只走 82px），
+    # 表现就是「难拖动」。所以拖动这一路改成自己跑：按下标题栏时拿到鼠标
+    # 抓取点，每帧按指数缓动把窗口位置往「光标 - 抓取点」逼近，跟悬浮窗
+    # 那套插值完全一致。缩放（拖边框）交给系统原生，保持即时跟手。
+    def _drag_log(self, text: str) -> None:
+        path = os.environ.get("VEXRUSH_DRAG_LOG")
+        if not path:
+            return
         try:
-            msg = ctypes.wintypes.MSG.from_address(int(message))
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write("%.3f %s\n" % (time.perf_counter(), text))
         except Exception:
-            return super().nativeEvent(event_type, message)
-        # 不论开不开缓动，拖动期间都要记下来：resizeEvent 里不能再插自动贴合，
-        # 否则会跟系统的拖动循环互相推，画面就是抽。
-        if msg.message == WM_ENTERSIZEMOVE:
-            self._ease_reset()
-            return super().nativeEvent(event_type, message)
-        if msg.message == WM_EXITSIZEMOVE:
-            self._ease_end()
-            return super().nativeEvent(event_type, message)
-        if msg.message in (WM_SIZING, WM_MOVING) and getattr(self.cfg, "smooth_window", False):
-            if getattr(self, "_ease_pos", None) is None:
-                self._ease_reset()
-            if self._ease_apply(msg.lParam):
-                return True, 1
-        return super().nativeEvent(event_type, message)
+            pass
 
-    def _dpi_scale(self) -> float:
-        """物理像素 / 逻辑像素（把最小尺寸换算成物理像素时用）。"""
+    def _caption_start(self) -> bool:
+        """标题栏按下：接管拖动。返回 True 表示已经处理，不再走系统默认。"""
+        if self.isMaximized() or self.isFullScreen():
+            return False
         try:
-            rect = win32gui.GetWindowRect(int(self.winId()))
-            physical = max(1, rect[2] - rect[0])
-            return max(1.0, physical / float(max(1, self.width())))
+            hwnd = int(self.winId())
+            rect = win32gui.GetWindowRect(hwnd)
+            cursor = win32api.GetCursorPos()
         except Exception:
-            return 1.0
-
-    def _ease_reset(self) -> None:
-        """开始拖动：缓动起点对齐到窗口当前位置，并停掉所有会自己改窗口大小的动画。"""
+            return False
         for name in ("_fit_timer", "_squeeze_timer"):
             timer = getattr(self, name, None)
             if timer is not None:
@@ -850,52 +889,169 @@ class MainWindow(QMainWindow):
         anim = getattr(self, "_width_anim", None)
         if anim is not None:
             anim.stop()
-        try:
-            rect = win32gui.GetWindowRect(int(self.winId()))
-            self._ease_pos = [float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3])]
-        except Exception:
-            self._ease_pos = None
-        self._ease_stamp = time.perf_counter()
+        self._drag_grab = (cursor[0] - rect[0], cursor[1] - rect[1])
+        self._drag_pos = [float(rect[0]), float(rect[1])]
+        self._drag_target = (float(rect[0]), float(rect[1]))
+        self._drag_stamp = time.perf_counter()
         self._drag_active = True
-
-    def _ease_apply(self, lparam) -> bool:
-        """把 lParam 里的目标矩形向缓动位置靠近一步，再把结果写回 lParam。"""
+        self._caption_drag = True
         try:
-            values = ctypes.cast(lparam, ctypes.POINTER(ctypes.c_long * 4)).contents
+            USER32.SetCapture(hwnd)
         except Exception:
-            return False
-        target = [float(values[0]), float(values[1]), float(values[2]), float(values[3])]
-        pos = getattr(self, "_ease_pos", None)
-        if pos is None or not getattr(self, "_drag_active", False):
-            self._ease_reset()
-            pos = getattr(self, "_ease_pos", None)
-            if pos is None:
-                return False
-        now = time.perf_counter()
-        dt = min(0.05, max(0.002, now - getattr(self, "_ease_stamp", now)))
-        self._ease_stamp = now
-        # 位置突然跳很远（换显示器 / DPI 变化 / 系统重排）就别追，直接对齐，免得来回弹
-        if abs(target[0] - pos[0]) + abs(target[1] - pos[1]) > 1600:
-            pos = list(target)
-        k = min(0.6, 1.0 - math.exp(-dt * EASE_RATE))
-        eased = [pos[i] + (target[i] - pos[i]) * k for i in range(4)]
-        self._ease_pos = eased
-        values[0] = int(round(eased[0]))
-        values[1] = int(round(eased[1]))
-        values[2] = int(round(eased[2]))
-        values[3] = int(round(eased[3]))
+            pass
+        if not self.isActiveWindow():
+            try:
+                winapi.bring_to_front(hwnd)
+            except Exception:
+                pass
+        timer = getattr(self, "_drag_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setTimerType(Qt.PreciseTimer)
+            timer.setInterval(winapi.frame_interval_ms())
+            timer.timeout.connect(self._caption_step)
+            self._drag_timer = timer
+        timer.start()
+        self._drag_log("start pos=%s grab=%s" % (self._drag_pos, self._drag_grab))
         return True
 
-    def _ease_end(self) -> None:
-        self._ease_pos = None
+    def _caption_step(self) -> None:
+        if not getattr(self, "_caption_drag", False):
+            return
+        try:
+            hwnd = int(self.winId())
+            cursor = win32api.GetCursorPos()
+        except Exception:
+            return
+        grab = getattr(self, "_drag_grab", (0, 0))
+        target = (float(cursor[0] - grab[0]), float(cursor[1] - grab[1]))
+        pos = getattr(self, "_drag_pos", [target[0], target[1]])
+        now = time.perf_counter()
+        dt = min(0.05, max(0.002, now - getattr(self, "_drag_stamp", now)))
+        self._drag_stamp = now
+        dx, dy = target[0] - pos[0], target[1] - pos[1]
+        if abs(dx) + abs(dy) > 2000.0:      # 光标瞬移（切显示器等）就直接对齐
+            pos = [target[0], target[1]]
+            dx = dy = 0.0
+        else:
+            k = min(0.55, 1.0 - math.exp(-dt * DRAG_RATE))
+            pos = [pos[0] + dx * k, pos[1] + dy * k]
+            if abs(target[0] - pos[0]) < 0.6:
+                pos[0] = target[0]
+            if abs(target[1] - pos[1]) < 0.6:
+                pos[1] = target[1]
+        self._drag_pos = pos
+        self._drag_target = target
+        self._drag_log("step target=%s pos=%s" % (target, (round(pos[0], 1), round(pos[1], 1))))
+        try:
+            win32gui.SetWindowPos(hwnd, 0, int(round(pos[0])), int(round(pos[1])), 0, 0,
+                                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+    def _caption_end(self, snap: bool = True) -> None:
+        if snap and getattr(self, "_caption_drag", False):
+            try:
+                hwnd = int(self.winId())
+                target = getattr(self, "_drag_target", None)
+                if target is not None:
+                    win32gui.SetWindowPos(hwnd, 0, int(round(target[0])),
+                                          int(round(target[1])), 0, 0,
+                                          SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
+            except Exception:
+                pass
+        timer = getattr(self, "_drag_timer", None)
+        if timer is not None:
+            timer.stop()
+        if getattr(self, "_caption_drag", False):
+            try:
+                if USER32.GetCapture() == int(self.winId()):
+                    USER32.ReleaseCapture()
+            except Exception:
+                pass
+        self._caption_drag = False
         self._drag_active = False
-        self._ease_target = None
-        QTimer.singleShot(80, lambda: self._fit_height(allow_shrink=False, animate=True))
-        if self.width() < self._min_width_for_cards():
-            QTimer.singleShot(140, self._spring_back_width)
+        self._drag_log("end snap=%s target=%s" % (snap, getattr(self, "_drag_target", None)))
+        self.mark_dirty()
+        QTimer.singleShot(70, lambda: self._fit_height(allow_shrink=False, animate=True))
+
+    def filter_native(self, message):
+        """应用级过滤器调到这里；返回 None 表示不拦，返回数字表示吃掉并返回它。"""
+        try:
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+        except Exception:
+            return None
+        handled = self._handle_native_msg(msg)
+        if not handled:
+            return None
+        return handled[1]
+
+    def nativeEvent(self, event_type, message):
+        """兜底：万一某条消息走到了窗口过程，这里同样处理一遍。"""
+        if event_type != b"windows_generic_MSG":
+            return super().nativeEvent(event_type, message)
+        try:
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+        except Exception:
+            return super().nativeEvent(event_type, message)
+        handled = self._handle_native_msg(msg)
+        if handled:
+            return True, handled[1]
+        return super().nativeEvent(event_type, message)
+
+    def _handle_native_msg(self, msg):
+        """返回 (True, 返回值) 表示吃掉这条消息；返回 None 表示放行。"""
+        own = getattr(self, "_hwnd", 0)
+        if not own:
+            return None
+        command = msg.message
+        smooth = bool(getattr(self.cfg, "smooth_window", False))
+        same_window = (int(msg.hWnd) == own)
+        if command == WM_NCLBUTTONDOWN and same_window:
+            if smooth and msg.wParam == HTCAPTION and self._caption_start():
+                return True, 1
+            return None
+        if command == WM_NCLBUTTONDBLCLK and same_window:
+            if smooth and msg.wParam == HTCAPTION:
+                if self.isMaximized():
+                    self.showNormal()
+                else:
+                    self.showMaximized()
+                return True, 1
+            return None
+        if getattr(self, "_caption_drag", False) and same_window:
+            if command == WM_MOUSEMOVE:
+                return True, 0
+            if command == WM_LBUTTONUP:
+                self._drag_log("lbuttonup")
+                self._caption_end(snap=True)
+                return True, 0
+            if command == WM_KEYDOWN and msg.wParam == 0x1B:      # Esc 取消这次拖动
+                self._caption_end(snap=True)
+                return True, 0
+            if command == WM_CAPTURECHANGED:
+                self._caption_end(snap=False)
+                return None
+        # 系统模态循环（拖边框缩放）：期间不能让自动贴合插一脚，否则会互相推
+        if command == WM_ENTERSIZEMOVE and same_window:
+            self._drag_active = True
+            for name in ("_fit_timer", "_squeeze_timer"):
+                timer = getattr(self, name, None)
+                if timer is not None:
+                    timer.stop()
+            return None
+        if command == WM_EXITSIZEMOVE and same_window:
+            self._drag_active = False
+            QTimer.singleShot(80, lambda: self._fit_height(allow_shrink=False, animate=True))
+            if self.width() < self._min_width_for_cards():
+                QTimer.singleShot(140, self._spring_back_width)
+            return None
+        return None
 
     def _fit_height(self, allow_shrink: bool = False, animate: bool = True) -> None:
         """让窗口高度贴合卡片内容：挤到就长高，多出空白就收一点。"""
+        if getattr(self, "_caption_drag", False) or getattr(self, "_drag_active", False):
+            return
         viewport = self.cards_scroll.viewport().height()
         content = self.cards_host.sizeHint().height()
         if viewport <= 0 or content <= 0:
@@ -934,6 +1090,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- 事件
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        try:
+            self._hwnd = int(self.winId())
+        except Exception:
+            pass
         if not getattr(self, "_dwm_done", False):
             self._dwm_done = True
             winapi.apply_dark_titlebar(int(self.winId()), theme_mod.is_dark(self.cfg.appearance.theme))
@@ -944,6 +1104,12 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, lambda: self._fit_height(allow_shrink=True, animate=False))
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        filt = getattr(self, "_drag_filter", None)
+        if filt is not None:
+            app = QApplication.instance()
+            if app is not None:
+                app.removeNativeEventFilter(filt)
+            self._drag_filter = None
         if self._save_timer.isActive():
             self._save_timer.stop()
         self.cfg.geometry = self._encode_geometry()
