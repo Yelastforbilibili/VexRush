@@ -20,7 +20,7 @@ from .i18n import tr
 APP_NAME = "VexRush"
 APP_ID = "VexRush.Clicker.1"
 GITHUB_URL = "https://github.com/Yelastforbilibili/VexRush"
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.2.3"
 CONFIG_NAME = "config.json"
 CONFIG_VERSION = 2
 
@@ -187,8 +187,17 @@ class ChannelConfig:
 
 
 def default_channels() -> List[ChannelConfig]:
-    first = ChannelConfig(name="连点1", interval_ms=15, trigger_mouse="left", sim_mouse="left", hotkey="x")
-    second = ChannelConfig(name="连点2", interval_ms=15, trigger_mouse="right", sim_mouse="right", hotkey="r")
+    """出厂的两路配置。
+
+    取自日常使用的一套参数：两路都用鼠标右键触发，第一路补左键点击、第二路补右键点击，
+    热键分别是 x 与 r。
+    """
+    first = ChannelConfig(name="左键连点", interval_ms=50, trigger_kind="mouse",
+                          trigger_mouse="right", trigger_key="", sim_mouse="left",
+                          hotkey="x", enabled=False)
+    second = ChannelConfig(name="右键连点", interval_ms=15, trigger_kind="mouse",
+                           trigger_mouse="right", trigger_key="", sim_mouse="right",
+                           hotkey="r", enabled=False)
     return [first, second]
 
 
@@ -331,13 +340,14 @@ class OverlayConfig:
 
 @dataclass
 class AppConfig:
-    target_process: str = ""
+    target_process: str = ""       # 出厂留空，启动时由自动识别挑选
     send_mode: str = "post"        # post | send
     auto_detect: bool = True
     exclusive: bool = True         # 防卡手：同一时间只允许一路开启
     restore_previous: bool = False  # 防卡手：关闭后恢复上一路
     ignore_ime: bool = False        # 在输入框里打字时不响应热键与键盘触发
     smooth_window: bool = True     # 拖动边框/标题栏时窗口缓动跟随鼠标
+    check_updates: bool = True     # 启动时在后台检查更新
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     channels: List[ChannelConfig] = field(default_factory=default_channels)
@@ -354,6 +364,7 @@ class AppConfig:
         # 输入框/输入法的判定在各家程序里都不可靠，功能暂时下线，强制关闭
         self.ignore_ime = False
         self.smooth_window = bool(self.smooth_window)
+        self.check_updates = bool(self.check_updates)
         self.appearance = (self.appearance or AppearanceConfig()).normalize()
         self.overlay = (self.overlay or OverlayConfig()).normalize()
         channels = list(self.channels or [])
@@ -388,6 +399,7 @@ class AppConfig:
             "restore_previous": self.restore_previous,
             "ignore_ime": self.ignore_ime,
             "smooth_window": self.smooth_window,
+            "check_updates": self.check_updates,
             "appearance": self.appearance.to_dict(),
             "overlay": self.overlay.to_dict(),
             "channels": [channel.to_dict() for channel in self.channels],
@@ -407,6 +419,7 @@ class AppConfig:
         item.restore_previous = data.get("restore_previous", item.restore_previous)
         item.ignore_ime = data.get("ignore_ime", item.ignore_ime)
         item.smooth_window = data.get("smooth_window", item.smooth_window)
+        item.check_updates = data.get("check_updates", item.check_updates)
         item.appearance = AppearanceConfig.from_dict(data.get("appearance"))
         item.overlay = OverlayConfig.from_dict(data.get("overlay"))
         item.geometry = data.get("geometry", item.geometry)
@@ -502,6 +515,7 @@ def copy_into(dst: AppConfig, src: AppConfig) -> AppConfig:
     dst.restore_previous = src.restore_previous
     dst.ignore_ime = src.ignore_ime
     dst.smooth_window = src.smooth_window
+    dst.check_updates = src.check_updates
     dst.geometry = src.geometry
     dst.expanded = [list(pair) for pair in src.expanded]
 

@@ -347,7 +347,8 @@ class CaptionDragMixin:
                 return None
         # 系统模态循环（拖边框缩放）：期间不能让自动贴合插一脚，否则会互相推
         if command == winapi.WM_HOTKEY:
-            name = self._hotkey_map.get(int(msg.wParam))
+            mapping = getattr(self, "_hotkey_map", None) or {}
+            name = mapping.get(int(msg.wParam))
             if name:
                 self._on_hotkey(name)
                 return True, 0
@@ -365,7 +366,6 @@ class CaptionDragMixin:
             if self.width() < self._min_width_for_cards():
                 QTimer.singleShot(140, self._spring_back_width)
             return None
-        return None
 
     def _fit_height(self, allow_shrink: bool = False, animate: bool = True) -> None:
         """让窗口高度贴合卡片内容：挤到就长高，多出空白就收一点。"""

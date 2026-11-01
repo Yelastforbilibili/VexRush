@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 build/
 dist/
@@ -11,3 +11,6 @@ _v1/
 config.json
 __*
 _*
+
+# local development standard, not published
+/DEV_STANDARD.md

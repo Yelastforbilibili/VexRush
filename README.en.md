@@ -23,6 +23,8 @@ in the foreground.
   horizontal, with enter/exit animations and click-through support.
 - Settings are saved automatically in `%APPDATA%\VexRush\config.json`, including window
   position and both channel switches.
+- Built-in update check: GitHub direct connection with automatic proxy fallback, line speed test
+  before download and SHA-256 verification afterwards.
 
 ## Window
 
@@ -97,6 +99,25 @@ UI languages are JSON files in `%APPDATA%\VexRush\lang\`, shipped with `zh_cn.js
 - Missing keys fall back to the built-in Simplified Chinese text, then to the key itself.
 - Languages added by users are marked *unofficial* in the list.
 
+## Updates
+
+Updates are published as GitHub Releases of this repository and can be checked, downloaded and
+installed from inside the application.
+
+- *Check update* on the right side of the settings title bar runs a manual check; the result is
+  shown right after the button (with a spinner while checking).
+- A silent check runs once after startup. When a newer build exists, a hint appears in the footer
+  of the main window and opens the update window; it can be turned off in
+  *Settings → Usage → Check on startup*.
+- The release API is queried over the direct GitHub connection first and falls back within two
+  seconds to `cdn.gh-proxy.org`, `v6.gh-proxy.org` and `gh-proxy.org`.
+- Available lines are speed-tested and sorted before downloading, and the download is verified
+  against the SHA-256 published by the GitHub API; a mismatching file is discarded and the next
+  line is tried.
+- Release notes are rendered as Markdown in the update window. Installing closes the
+  application, replaces `VexRush.exe` and restarts it. Downloads are kept in
+  `%APPDATA%\VexRush\update\`.
+
 ## Requirements
 
 - Windows 10 / 11 (x64).
@@ -111,8 +132,9 @@ UI languages are JSON files in `%APPDATA%\VexRush\lang\`, shipped with `zh_cn.js
   the window messages.
 - The "ignore while typing" option is temporarily unavailable: input-box and IME composition
   detection differs too much between programs to be reliable, so the option is off and locked.
-- Exclusive fullscreen programs may swallow global hotkeys. Hotkeys are registered through both
-  a low-level keyboard hook and the system hotkey API, which covers most cases.
+- Hotkeys are captured by a low-level keyboard hook. `F1`–`F24` are additionally registered with
+  the system hotkey API so they still trigger when the hook is unavailable; letters and digits
+  use the hook only and therefore never intercept normal typing.
 - While the VexRush window is in the foreground no clicks are sent, so interacting with its own
   interface never leaks into the target.
 
@@ -183,6 +205,8 @@ app/
   screen.py              monitor geometry helpers (clamping points and widgets on-screen)
   textfmt.py             number and text formatters
   debug.py               optional file logging (VEXRUSH_DEBUG)
+  updater.py             release check, mirror speed test, SHA-256 verification, download
+  update_dialog.py       update window and the check / download worker threads
 assets/fonts/            ChillRoundM and its OFL licence text
 assets/lang/             zh_cn.json, en_us.json, example.json
 tests/, tools/           test suites and developer tools (preview.py, make_icon.py)

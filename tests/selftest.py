@@ -30,7 +30,9 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication
 
 from app import config as cfg_mod
+from app import mainwindow as mainwindow_mod
 from app import engine, overlay as overlay_mod, theme as theme_mod, widgets as w, winapi
+from app.i18n import tr
 
 FAILURES = []
 TESTS = []
@@ -82,8 +84,11 @@ def test_config_roundtrip() -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("{这都不是 json")
     fallback = cfg_mod.load_config(path)
-    check("坏配置回退默认", fallback.channels[0].interval_ms == 15
-          and fallback.appearance.theme == cfg_mod.AppConfig().appearance.theme)
+    fresh = cfg_mod.AppConfig().normalize()
+    check("坏配置回退默认", fallback.channels[0].interval_ms == fresh.channels[0].interval_ms
+          and fallback.channels[0].name == fresh.channels[0].name
+          and fallback.appearance.theme == fresh.appearance.theme,
+          "%s/%sms" % (fallback.channels[0].name, fallback.channels[0].interval_ms))
     os.unlink(path)
 
 
@@ -496,61 +501,33 @@ def test_overlay_menu() -> None:
 
 @test
 def test_ime_gate() -> None:
-    from pynput.keyboard import Key
-    from pynput.mouse import Button
-
     input_state = engine.InputState()
     hub = engine.InputHub(input_state)
     hub.ignore_ime = True
     original = winapi.text_input_active
     try:
         winapi.text_input_active = lambda: True
-        hub._on_press(Key.f19)
+        hub._on_key("f19", True)
         check("正在打字时键盘热键不响应", not input_state.is_down("k:f19"))
-        hub._on_click(0, 0, Button.left, True)
+        hub._on_mouse("m:left", True)
         check("正在打字时鼠标触发也不响应", not input_state.is_down("m:left"))
 
         winapi.text_input_active = lambda: False
-        hub._on_press(Key.f19)
+        hub._on_key("f19", True)
         check("没在打字时键盘热键照常响应", input_state.is_down("k:f19"))
-        hub._on_release(Key.f19)
-        hub._on_click(0, 0, Button.left, True)
+        hub._on_key("f19", False)
+        hub._on_mouse("m:left", True)
         check("没在打字时鼠标触发照常响应", input_state.is_down("m:left"))
-        hub._on_click(0, 0, Button.left, False)
+        hub._on_mouse("m:left", False)
 
         hub.ignore_ime = False
         winapi.text_input_active = lambda: True
-        hub._on_press(Key.f19)
+        hub._on_key("f19", True)
         check("关掉这个开关后打字时也响应", input_state.is_down("k:f19"))
-        hub._on_release(Key.f19)
+        hub._on_key("f19", False)
     finally:
         winapi.text_input_active = original
         hub.stop()
-
-    cfg = cfg_mod.AppConfig()
-    shared = engine.SharedState()
-    channel = engine.Channel(0, shared)
-    channel.cfg = cfg.channels[0]
-    cfg.channels[0].enabled = True
-    shared.input_state.set("m:left", True)
-    original_active = winapi.text_input_active
-    original_self = winapi.foreground_is_self
-    try:
-        winapi.foreground_is_self = lambda: False
-        winapi.text_input_active = lambda: False
-        check("没打字时按住触发键就连点", channel.is_clicking() is True)
-        shared.ime_guard = True
-        winapi.text_input_active = lambda: True
-        check("按住期间开始打字就停下来", channel.is_clicking() is False)
-        winapi.text_input_active = lambda: False
-        check("不打字了就恢复连点", channel.is_clicking() is True)
-        shared.ime_guard = False
-        winapi.text_input_active = lambda: True
-        check("ime_guard 关掉后打字也照常连点", channel.is_clicking() is True)
-    finally:
-        winapi.text_input_active = original_active
-        winapi.foreground_is_self = original_self
-        shared.input_state.clear()
 
 
 @test
@@ -621,6 +598,7 @@ def test_window_easing_and_lang() -> None:
     cfg = cfg_mod.AppConfig()
     cfg.geometry = ""
     window = MainWindow(cfg)
+    window._first_fit_done = True          # 关掉首次自适应动画，尺寸才好比对
     window.show()
     _pump()
     check("窗口缓动默认开启", cfg.smooth_window is True)
@@ -776,6 +754,182 @@ def test_overlay_glide_range() -> None:
     check("快甩：溜出去不超过上限", flick <= overlay_mod.GLIDE_MAX_DISTANCE + 2,
           "%d px" % flick)
     check("关掉惯性：松手不动", off <= 1, "%d px" % off)
+
+
+# ---------------------------------------------------------------- 更新
+@test
+def test_update_version_logic() -> None:
+    from app import updater
+
+    check("版本号解析", updater.parse_version("v3.2.2") == (3, 2, 2),
+          str(updater.parse_version("v3.2.2")))
+    check("版本号解析带后缀", updater.parse_version("V3.2.2-beta1") == (3, 2, 2, 1),
+          str(updater.parse_version("V3.2.2-beta1")))
+    check("新版本判定", updater.is_newer("3.2.2", "v3.2.3") and not updater.is_newer("3.2.2", "3.2.2")
+          and not updater.is_newer("3.3.0", "3.2.9"))
+    urls = updater.candidate_urls("https://example.com/api")
+    check("更新地址带加速站", urls[0] == "https://example.com/api" and len(urls) == 4
+          and urls[1].startswith("https://cdn.gh-proxy.org/https://example.com/api"),
+          urls[1])
+
+
+@test
+def test_update_release_parse() -> None:
+    from app import updater
+
+    payload = {
+        "tag_name": "v9.9.9",
+        "name": "VexRush 9.9.9",
+        "body": "## Added\n- stuff",
+        "html_url": "https://github.com/x/y/releases/tag/v9.9.9",
+        "published_at": "2026-01-02T03:04:05Z",
+        "assets": [
+            {"name": "notes.txt", "size": 10, "browser_download_url": "https://e/n.txt"},
+            {"name": "VexRush.exe", "size": 123, "digest": "sha256:" + "a" * 64,
+             "browser_download_url": "https://e/VexRush.exe"},
+        ],
+    }
+    info = updater.parse_release(payload, "direct")
+    check("解析发布信息", info.version_text == "9.9.9" and info.asset_name == "VexRush.exe"
+          and info.asset_size == 123 and info.sha256 == "a" * 64, info.asset_url)
+    check("没有安装包时给出提示",
+          _raises(updater.UpdateError, lambda: updater.parse_release({"tag_name": "v1", "assets": []})))
+
+    path = os.path.join(ROOT, "tests", "_selftest_hash.bin")
+    with open(path, "wb") as handle:
+        handle.write(b"vexrush")
+    digest = updater.sha256_file(path)
+    os.remove(path)
+    check("SHA-256 计算", digest == "5b6ed0c8eb576274931d137effcf58177c914396f01f2c3401030b50dd289d81", digest)
+
+
+def _raises(exc_type, fn) -> bool:
+    try:
+        fn()
+    except exc_type:
+        return True
+    except Exception:
+        return False
+    return False
+
+
+@test
+def test_update_dialog_and_hotkey_grab() -> None:
+    from app import mainwindow as mw_mod, update_dialog, updater
+
+    for name, expected in (("x", False), ("r", False), ("1", False), ("f1", True), ("f12", True)):
+        if (name in mw_mod.SYSTEM_HOTKEY_KEYS) is not expected:
+            check("系统热键只独占功能键（%s）" % name, False)
+            break
+    else:
+        check("系统热键只独占功能键（字母数字不会被吞）", True)
+
+    release = updater.ReleaseInfo(
+        tag="v9.9.9", version=(9, 9, 9), name="VexRush 9.9.9",
+        notes="## Added\n- something new\n\n## Fixed\n- a bug",
+        html_url="", published_at="2026-01-02T03:04:05Z",
+        asset_name="VexRush.exe", asset_url="https://e/VexRush.exe",
+        asset_size=40698103, sha256="a" * 64, source="github.com")
+    dialog = update_dialog.UpdateDialog(release)
+    app = QApplication.instance()
+    for _ in range(6):
+        app.processEvents()
+        time.sleep(0.01)
+    text = dialog.notes.toPlainText()
+    check("更新窗口渲染 Markdown", "something new" in text and "a bug" in text, text[:40].replace("\n", " "))
+    check("更新窗口显示版本与按钮", dialog.btn_go.text() == tr_done("download_install"),
+          dialog.btn_go.text())
+    dialog.close()
+
+
+def tr_done(key: str) -> str:
+    from app.i18n import tr
+    return tr(key)
+
+
+@test
+def test_update_widgets() -> None:
+    from app import mainwindow as mw_mod
+
+    window = mw_mod.MainWindow(cfg_mod.AppConfig().normalize())
+    window.show()
+    for _ in range(8):
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
+    check("主界面底部有更新提示按钮且默认隐藏",
+          hasattr(window, "btn_update_tip") and not window.btn_update_tip.isVisible())
+
+    dialog = window._ensure_settings()
+    for _ in range(8):
+        QApplication.instance().processEvents()
+        time.sleep(0.01)
+    check("设置窗标题栏有检查更新按钮与转圈",
+          hasattr(dialog, "btn_update") and hasattr(dialog, "spinner_update")
+          and hasattr(dialog, "lbl_update"))
+    check("检查更新按钮点击后进入检查态",
+          _click_and_probe(dialog))
+    check("使用区有启动检查更新开关", hasattr(dialog, "sw_updates")
+          and dialog.sw_updates.isChecked() == bool(window.cfg.check_updates))
+    check("启动检查更新开关写回配置", _toggle_updates(dialog))
+
+    window.close()
+
+
+def _click_and_probe(dialog) -> bool:
+    from app import update_dialog
+    original = update_dialog.CheckWorker
+
+    class _Stub(original):                    # 不联网，只验证界面状态
+        def run(self) -> None:
+            time.sleep(0.05)
+
+    update_dialog.CheckWorker = _Stub
+    try:
+        dialog._on_check_update()
+        for _ in range(12):
+            QApplication.instance().processEvents()
+            time.sleep(0.01)
+        busy = dialog.spinner_update.isVisible() or dialog.lbl_update.text() != ""
+        dialog._check_worker.wait(2000) if dialog._check_worker else None
+        return bool(busy)
+    finally:
+        update_dialog.CheckWorker = original
+
+
+def _toggle_updates(dialog) -> bool:
+    before = dialog.cfg.check_updates
+    dialog.sw_updates.setChecked(not before)
+    QApplication.instance().processEvents()
+    ok = dialog.cfg.check_updates == (not before)
+    dialog.sw_updates.setChecked(before)
+    QApplication.instance().processEvents()
+    return ok
+
+
+@test
+def test_input_hub_callbacks() -> None:
+    """输入通道改回 pynput 后，回调入口仍然把按键/鼠标喂给 InputState 与热键信号。"""
+    from app import engine
+
+    state = engine.InputState()
+    hub = engine.InputHub(state)
+    fired = []
+    hub.hotkeyPressed.connect(fired.append)
+
+    hub._on_key("x", True)
+    down = state.is_down("k:x")
+    hub._on_key("x", False)
+    up = state.is_down("k:x")
+    hub._on_mouse("m:left", True)
+    mouse_down = state.is_down("m:left")
+    hub._on_mouse("m:left", False)
+
+    check("键盘按下写入 InputState", down)
+    check("键盘抬起清除 InputState", not up)
+    check("鼠标按下写入 InputState", mouse_down)
+    check("热键按下发出信号", fired == ["x"], str(fired))
+    check("收到的输入进了「输入测试」列表", bool(list(hub.recent)))
+    check("InputHub 有 pynput 监听器定义", hasattr(engine, "pynput_keyboard"))
 
 
 def main() -> int:

@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
     wintypes = None
 
 USER32 = ctypes.windll.user32 if os.name == "nt" else None
+SHELL32 = ctypes.windll.shell32 if os.name == "nt" else None
 
 # ---------------------------------------------------------------- 常量
 
@@ -133,6 +134,11 @@ _QT_NAMES = {
     0x20: "space",
 }
 
+# F13–F24：Qt 与 Win32 都有，但它们不在上面的常见键表里
+for _fk in range(13, 25):
+    _QT_NAMES[0x01000030 + _fk - 1] = "f%d" % _fk
+del _fk
+
 
 def qt_key_to_name(key: int) -> str:
     """Qt.Key → 统一的键名。"""
@@ -235,6 +241,14 @@ def foreground_window() -> int:
 
 def foreground_process_name() -> str:
     return process_name(window_pid(foreground_window()))
+
+
+def is_admin() -> bool:
+    """当前进程是否以管理员权限运行。"""
+    try:
+        return bool(SHELL32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 def foreground_is_self() -> bool:
@@ -481,20 +495,41 @@ def _iter_gui_windows(include_self: bool = False) -> List[int]:
 
 
 def find_target_window(process_name_wanted: str) -> int:
-    """按进程名找窗口，多个窗口时取客户区最大的那个。"""
-    wanted = str(process_name_wanted or "").strip()
-    if not wanted:
+    """按进程名找可见窗口，取客户区最大的那个（与 AutoCk.py 的实现一致）。
+
+    只做两件事：窗口可见 + psutil 读到的进程名等于目标名。
+    """
+    proc_name = str(process_name_wanted or "").strip().lower()
+    if not proc_name or psutil is None:
         return 0
     best, best_area = 0, 0
-    for hwnd in _iter_gui_windows():
-        pid = window_pid(hwnd)
-        if not pid:
-            continue
-        if not _proc_matches(process_name(pid), wanted):
-            continue
-        area = client_area(hwnd)
-        if area > best_area:
-            best, best_area = hwnd, area
+
+    def callback(hwnd, extra):
+        nonlocal best, best_area
+        try:
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            if not pid or pid == os.getpid():
+                return True
+            try:
+                name = psutil.Process(pid).name()
+            except Exception:
+                return True
+            if not _proc_matches(name, proc_name):
+                return True
+            rect = win32gui.GetClientRect(hwnd)
+            area = max(0, int(rect[2])) * max(0, int(rect[3]))
+            if area >= best_area:
+                best, best_area = hwnd, area
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(callback, None)
+    except Exception:
+        pass
     return best
 
 
@@ -561,10 +596,9 @@ def send_mouse_click(hwnd, button: str = "left", sync: bool = False) -> bool:
         return False
     down_msg, up_msg, wparam = spec
     try:
-        left, top, right, bottom = win32gui.GetClientRect(hwnd)
-        cx = max(0, (right - left) // 2)
-        cy = max(0, (bottom - top) // 2)
-        point = win32api.MAKELONG(cx, cy)
+        # 用它真实的鼠标位置换算客户区坐标（与 AutoCk.py 一致）：点在哪个控件上就投到哪里
+        cx, cy = win32gui.ScreenToClient(int(hwnd), win32api.GetCursorPos())
+        point = win32api.MAKELONG(int(cx) & 0xFFFF, int(cy) & 0xFFFF)
         poster = win32gui.SendMessage if sync else win32gui.PostMessage
         poster(hwnd, down_msg, wparam, point)
         poster(hwnd, up_msg, 0, point)
@@ -657,6 +691,190 @@ def unregister_hotkey(hwnd: int, hotkey_id: int) -> None:
         USER32.UnregisterHotKey(int(hwnd), int(hotkey_id))
     except Exception:
         pass
+
+
+# -- 原始输入（Raw Input）------------------------------------------------
+# 低级键盘钩子依赖「输入队列与完整性级别」，前台是全屏独占/游戏窗口时可能收不到。
+# 原始输入用 RIDEV_INPUTSINK 注册到我们自己的窗口，即使窗口不在前台，按键也会投递
+# 成 WM_INPUT，是这类工具最稳的一条通道。
+WM_INPUT = 0x00FF
+RIDEV_REMOVE = 0x00000001
+RIDEV_INPUTSINK = 0x00000100
+RID_INPUT = 0x10000003
+RIM_TYPEKEYBOARD = 1
+RI_KEY_BREAK = 0x01
+RI_KEY_E0 = 0x02
+RI_KEY_E1 = 0x04
+
+
+class _RawInputDevice(ctypes.Structure):
+    _fields_ = [("usUsagePage", ctypes.c_ushort),
+                ("usUsage", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_uint),
+                ("hwndTarget", ctypes.c_void_p)]
+
+
+class _RawInputHeader(ctypes.Structure):
+    _fields_ = [("dwType", ctypes.c_uint),
+                ("dwSize", ctypes.c_uint),
+                ("hDevice", ctypes.c_void_p),
+                ("wParam", ctypes.c_void_p)]
+
+
+class _RawKeyboard(ctypes.Structure):
+    _fields_ = [("MakeCode", ctypes.c_ushort),
+                ("Flags", ctypes.c_ushort),
+                ("Reserved", ctypes.c_ushort),
+                ("VKey", ctypes.c_ushort),
+                ("Message", ctypes.c_uint),
+                ("ExtraInformation", ctypes.c_void_p)]
+
+
+class _RawInput(ctypes.Structure):
+    _fields_ = [("header", _RawInputHeader), ("keyboard", _RawKeyboard)]
+
+
+def _init_raw_input() -> None:
+    USER32.RegisterRawInputDevices.restype = ctypes.c_bool
+    USER32.RegisterRawInputDevices.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+    USER32.GetRawInputData.restype = ctypes.c_uint
+    USER32.GetRawInputData.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p,
+                                       ctypes.POINTER(ctypes.c_uint), ctypes.c_uint]
+
+
+def register_keyboard_raw_input(hwnd: int) -> bool:
+    """把键盘注册成 RIDEV_INPUTSINK：窗口不在前台也能收到按键。"""
+    if os.name != "nt":
+        return False
+    try:
+        _init_raw_input()
+        device = _RawInputDevice(1, 6, RIDEV_INPUTSINK, ctypes.c_void_p(int(hwnd)))
+        return bool(USER32.RegisterRawInputDevices(
+            ctypes.byref(device), 1, ctypes.sizeof(_RawInputDevice)))
+    except Exception:
+        return False
+
+
+def unregister_keyboard_raw_input(hwnd: int) -> None:
+    try:
+        device = _RawInputDevice(1, 6, RIDEV_REMOVE, ctypes.c_void_p(int(hwnd)))
+        USER32.RegisterRawInputDevices(ctypes.byref(device), 1, ctypes.sizeof(_RawInputDevice))
+    except Exception:
+        pass
+
+
+def read_raw_keyboard(lparam: int) -> int:
+    """从 WM_INPUT 的 lParam 取按键的虚拟键码；不是「按下」就返回 0。"""
+    if os.name != "nt" or not lparam:
+        return 0
+    try:
+        size = ctypes.c_uint(0)
+        header_size = ctypes.sizeof(_RawInputHeader)
+        USER32.GetRawInputData.restype = ctypes.c_uint
+        if USER32.GetRawInputData(ctypes.c_void_p(int(lparam)), RID_INPUT, None,
+                                  ctypes.byref(size), header_size) != 0:
+            return 0
+        if not size.value or size.value > 1024:
+            return 0
+        buffer = ctypes.create_string_buffer(size.value)
+        got = USER32.GetRawInputData(ctypes.c_void_p(int(lparam)), RID_INPUT, buffer,
+                                     ctypes.byref(size), header_size)
+        if got == 0xFFFFFFFF or not got:
+            return 0
+        raw = ctypes.cast(buffer, ctypes.POINTER(_RawInput)).contents
+        if raw.header.dwType != RIM_TYPEKEYBOARD:
+            return 0
+        flags = raw.keyboard.Flags
+        if flags & RI_KEY_BREAK or flags & RI_KEY_E1:
+            return 0
+        if raw.keyboard.Message not in (0x0100, 0x0104):      # WM_KEYDOWN / WM_SYSKEYDOWN
+            return 0
+        return int(raw.keyboard.VKey)
+    except Exception:
+        return 0
+
+
+_VK_NAMES = {}
+
+
+RI_MOUSE_BUTTON_1_DOWN = 0x0001
+RI_MOUSE_BUTTON_1_UP = 0x0002
+RI_MOUSE_BUTTON_2_DOWN = 0x0004
+RI_MOUSE_BUTTON_2_UP = 0x0008
+RI_MOUSE_BUTTON_3_DOWN = 0x0010
+RI_MOUSE_BUTTON_3_UP = 0x0020
+
+_RAW_MOUSE_BUTTONS = (
+    (RI_MOUSE_BUTTON_1_DOWN, "m:left", True),
+    (RI_MOUSE_BUTTON_1_UP, "m:left", False),
+    (RI_MOUSE_BUTTON_2_DOWN, "m:right", True),
+    (RI_MOUSE_BUTTON_2_UP, "m:right", False),
+    (RI_MOUSE_BUTTON_3_DOWN, "m:middle", True),
+    (RI_MOUSE_BUTTON_3_UP, "m:middle", False),
+)
+
+
+def register_mouse_raw_input(hwnd: int) -> bool:
+    """鼠标也注册成 RIDEV_INPUTSINK：窗口不在前台时仍能收到按键状态。"""
+    if os.name != "nt":
+        return False
+    try:
+        _init_raw_input()
+        device = _RawInputDevice(1, 2, RIDEV_INPUTSINK, ctypes.c_void_p(int(hwnd)))
+        return bool(USER32.RegisterRawInputDevices(
+            ctypes.byref(device), 1, ctypes.sizeof(_RawInputDevice)))
+    except Exception:
+        return False
+
+
+def unregister_mouse_raw_input(hwnd: int) -> None:
+    try:
+        device = _RawInputDevice(1, 2, RIDEV_REMOVE, ctypes.c_void_p(int(hwnd)))
+        USER32.RegisterRawInputDevices(ctypes.byref(device), 1, ctypes.sizeof(_RawInputDevice))
+    except Exception:
+        pass
+
+
+def read_raw_mouse(lparam: int):
+    """从 WM_INPUT 里取鼠标按键变化，返回 [(spec, 按下与否), ...]。"""
+    if os.name != "nt" or not lparam:
+        return []
+    try:
+        size = ctypes.c_uint(0)
+        header_size = ctypes.sizeof(_RawInputHeader)
+        if USER32.GetRawInputData(ctypes.c_void_p(int(lparam)), RID_INPUT, None,
+                                  ctypes.byref(size), header_size) != 0:
+            return []
+        if not size.value or size.value > 1024:
+            return []
+        buffer = ctypes.create_string_buffer(size.value)
+        got = USER32.GetRawInputData(ctypes.c_void_p(int(lparam)), RID_INPUT, buffer,
+                                     ctypes.byref(size), header_size)
+        if got in (0, 0xFFFFFFFF):
+            return []
+        header = ctypes.cast(buffer, ctypes.POINTER(_RawInputHeader)).contents
+        if header.dwType != 0:                      # 0 = RIM_TYPEMOUSE
+            return []
+        # RAWMOUSE 里第 2 个字段是按钮标志位（usButtonFlags）
+        flags = ctypes.cast(
+            ctypes.addressof(buffer) + ctypes.sizeof(_RawInputHeader) + 4,
+            ctypes.POINTER(ctypes.c_ushort)).contents.value
+        events = []
+        for bit, spec, down in _RAW_MOUSE_BUTTONS:
+            if flags & bit:
+                events.append((spec, down))
+        return events
+    except Exception:
+        return []
+
+
+def vk_name(vk: int) -> str:
+    """虚拟键码 → 按键名（与 canon_key 的写法一致）。"""
+    if not _VK_NAMES:
+        for name, code in _VK_BY_NAME.items():
+            # 同一个键码可能有多个名字（return/enter、esc/escape…），保留第一个即可
+            _VK_NAMES.setdefault(code, name)
+    return _VK_NAMES.get(int(vk), "")
 
 
 def bring_to_front(hwnd) -> None:

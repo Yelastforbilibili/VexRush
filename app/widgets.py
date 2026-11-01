@@ -785,3 +785,51 @@ class BusyOverlay(QWidget):
         painter.drawText(QRectF(0, cy + radius + 8, self.width(), 24),
                          Qt.AlignHCenter | Qt.AlignTop, self._text)
         painter.end()
+
+
+class MiniSpinner(QWidget):
+    """按钮旁边的小转圈：固定 14px，start()/stop() 控制，隐藏时不占帧。"""
+
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(14, 14)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._angle = 0.0
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._on_tick)
+        self.hide()
+
+    def start(self) -> None:
+        if not self._timer.isActive():
+            self.show()
+            self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self.hide()
+
+    def running(self) -> bool:
+        return self._timer.isActive()
+
+    def _on_tick(self) -> None:
+        self._angle = (self._angle + 24.0) % 360.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        radius = 5.0
+        rect = QRectF(2.0, 2.0, radius * 2, radius * 2)
+        track = color("border_strong", 0.9)
+        pen = QPen(track)
+        pen.setWidthF(1.8)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(rect)
+        pen.setColor(color("accent", 1.0))
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(rect, int(-self._angle * 16), int(110 * 16))
+        painter.end()

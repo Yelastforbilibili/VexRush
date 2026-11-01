@@ -1,22 +1,32 @@
 """连点引擎：目标窗口注册、全局输入监听、双通道连点线程。"""
 from __future__ import annotations
 
+import collections
 import threading
 import time
 from typing import Dict, Optional
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+try:
+    from pynput import keyboard as pynput_keyboard
+    from pynput import mouse as pynput_mouse
+except Exception as _pynput_error:  # pragma: no cover - 依赖系统环境
+    pynput_keyboard = None
+    pynput_mouse = None
+    _PYNPUT_ERROR = _pynput_error
+else:
+    _PYNPUT_ERROR = None
+
 from . import winapi
+from . import hooks as hooks_mod
 from .config import ChannelConfig
 from . import debug
 from .i18n import tr
 
-try:
-    from pynput import keyboard as pynput_keyboard
-    from pynput import mouse as pynput_mouse
-except ImportError:  # pragma: no cover
-    pynput_keyboard = pynput_mouse = None
+WATCH_INTERVAL_MS = 8
+
+
 
 
 # ---------------------------------------------------------------- 输入状态
@@ -47,19 +57,11 @@ class InputState:
 
 
 class InputHub(QObject):
-    """用 pynput 监听全局鼠标/键盘，转成 InputState + 热键信号。"""
+    """用自装的低级钩子监听全局鼠标/键盘，转成 InputState + 热键信号。"""
 
     stateChanged = pyqtSignal(str, bool)
     hotkeyPressed = pyqtSignal(str)
     failed = pyqtSignal(str)
-
-    _MOUSE_MAP = {}
-    if pynput_mouse is not None:
-        _MOUSE_MAP = {
-            pynput_mouse.Button.left: "m:left",
-            pynput_mouse.Button.right: "m:right",
-            pynput_mouse.Button.middle: "m:middle",
-        }
 
     def __init__(self, state: InputState, parent=None) -> None:
         super().__init__(parent)
@@ -67,80 +69,158 @@ class InputHub(QObject):
         self.ignore_ime = False
         self._mouse_listener = None
         self._key_listener = None
+        self._hooks = None
         self._started = False
+        self._watch_triggers = {}
+        self._watch_hotkeys = {}
+        self._edge = {}
+        self._timer = None
+        self._clock = winapi.PrecisionClock()
+        self._alive_log_at = 0.0
+        # 最近的输入事件 (时间, 来源, 名字)，设置窗口里的「输入测试」直接读它
+        self.recent = collections.deque(maxlen=8)
+
+    def note(self, source: str, label: str) -> None:
+        try:
+            self.recent.append((time.strftime("%H:%M:%S"), source, label))
+        except Exception:
+            pass
+
+    def alive(self) -> bool:
+        return bool(self._started)
+
+    def _on_mouse(self, spec: str, pressed: bool) -> None:
+        """给测试用的入口：直接喂一个鼠标事件。"""
+        if pressed and self.ignore_ime and winapi.text_input_active():
+            return
+        if pressed:
+            self.note("hook", spec)
+        self.state.set(spec, pressed)
+        try:
+            self.stateChanged.emit(spec, bool(pressed))
+        except RuntimeError:
+            pass
+
+    def _on_key(self, name: str, down: bool) -> None:
+        """给钩子/测试用的入口：直接喂一个键盘事件。"""
+        name = winapi.canon_key(name)
+        if not name:
+            return
+        try:
+            if down and self.ignore_ime and winapi.text_input_active():
+                debug.log("key", "blocked %s (typing)" % name)
+                return
+            if down:
+                debug.log("key", "press %s (ignore_ime=%s)" % (name, self.ignore_ime))
+                self.note("hook", "k:" + name)
+            spec = "k:" + name
+            self.state.set(spec, down)
+            self.stateChanged.emit(spec, bool(down))
+            if down:
+                self.hotkeyPressed.emit(name)
+        except RuntimeError:      # 窗口已销毁
+            pass
+        except Exception as exc:
+            debug.log("input", "key handler failed: %r" % (exc,))
 
     # -- 生命周期 --------------------------------------------------
+    def watch(self, triggers, hotkeys) -> None:
+        """登记要轮询的按键：triggers 是 {"m:left": vk}，hotkeys 是 {"x": vk}。
+
+        GetAsyncKeyState 不依赖钩子，在打包版里同样有效，作为兜底通道。
+        """
+        self._watch_triggers = dict(triggers or {})
+        self._watch_hotkeys = dict(hotkeys or {})
+        for spec in list(self._edge):
+            if spec not in self._watch_triggers and spec not in self._watch_hotkeys:
+                self._edge.pop(spec, None)
+        if (self._watch_triggers or self._watch_hotkeys) and self._timer is None:
+            self._start_watch()
+
+    def _start_watch(self) -> None:
+        from PyQt5.QtCore import QTimer, Qt
+        timer = QTimer(self)
+        timer.setTimerType(Qt.PreciseTimer)
+        timer.setInterval(WATCH_INTERVAL_MS)
+        timer.timeout.connect(self._poll_watch)
+        self._clock.acquire()          # 让 8ms 定时器真的按 8ms 触发
+        timer.start()
+        self._timer = timer
+        debug.log("input", "watch started interval=%dms" % WATCH_INTERVAL_MS)
+
+    def _poll_watch(self) -> None:
+        now = time.perf_counter()
+        if now - getattr(self, "_poll_log_at", 0.0) >= 1.0:
+            self._poll_log_at = now
+            states = {}
+            for spec, vk in list(self._watch_triggers.items()) + list(self._watch_hotkeys.items()):
+                if vk:
+                    states[spec] = int(winapi.USER32.GetAsyncKeyState(int(vk))) & 0xFFFF
+            vks = dict(list(self._watch_triggers.items()) + list(self._watch_hotkeys.items()))
+            raw = {}
+            for spec, vk in vks.items():
+                raw[spec] = (vk, int(winapi.USER32.GetAsyncKeyState(int(vk))) & 0xFFFF)
+            debug.log("input", "poll states=%s vks=%s fg=%s"
+                      % (states, raw, winapi.foreground_window()))
+            self._check_listeners(now)
+        for spec, vk in list(self._watch_triggers.items()) + list(self._watch_hotkeys.items()):
+            if not vk:
+                continue
+            down = bool(int(winapi.USER32.GetAsyncKeyState(int(vk))) & 0x8000)
+            if down == self._edge.get(spec, False):
+                continue
+            self._edge[spec] = down
+            debug.log("poll", "%s down=%s" % (spec, down))
+            if down:
+                # 轮询只负责补「按下」：松开一律以钩子为准，避免两条通道互相打架
+                self.note("poll", spec)
+                self.state.set(spec, True)
+            self.stateChanged.emit(spec, down)
+            if down and spec in self._watch_hotkeys:
+                self.hotkeyPressed.emit(winapi.canon_key(spec))
+
+    def _check_listeners(self, now: float) -> None:
+        """钩子线程死了不会通知任何人，这里顺手确认它还活着。"""
+        key_alive = bool(self._hooks is not None and self._hooks.alive())
+        if now - self._alive_log_at >= 30.0:
+            self._alive_log_at = now
+            debug.log("input", "hooks alive=%s events=%s"
+                      % (key_alive, self._hooks.events() if self._hooks else -1))
+        if self._hooks is not None and not key_alive:
+            debug.log("input", "native hook thread stopped, restarting")
+            self.stop()
+            self.start()
+
     def start(self) -> bool:
-        if self._started or pynput_mouse is None:
+        if self._started:
             return self._started
         try:
-            self._mouse_listener = pynput_mouse.Listener(on_click=self._on_click)
-            self._mouse_listener.daemon = True
-            self._mouse_listener.start()
-            self._key_listener = pynput_keyboard.Listener(on_press=self._on_press,
-                                                          on_release=self._on_release)
-            self._key_listener.daemon = True
-            self._key_listener.start()
-            self._started = True
+            self._hooks = hooks_mod.LowLevelHooks(on_key=self._on_key, on_mouse=self._on_mouse)
+            self._hooks.start()
+            installed = self._hooks.wait_ready(2.0)
+            self._started = bool(installed)
+            debug.log("input", "native hooks installed=%s error=%s"
+                      % (installed, self._hooks.last_error))
+            if not installed:
+                self.failed.emit(tr("failed_to_start_global_listener") % self._hooks.last_error)
         except Exception as exc:  # pragma: no cover - 依赖系统环境
+            debug.log("input", "hook start failed: %r" % (exc,))
             self.failed.emit(tr("failed_to_start_global_listener") % exc)
             self._started = False
         return self._started
 
     def stop(self) -> None:
-        for listener in (self._mouse_listener, self._key_listener):
-            if listener is not None:
-                try:
-                    listener.stop()
-                except Exception:
-                    pass
-        self._mouse_listener = None
-        self._key_listener = None
+        if self._hooks is not None:
+            try:
+                self._hooks.stop()
+            except Exception:
+                pass
+        self._hooks = None
         self._started = False
         self.state.clear()
 
     # -- 回调 ------------------------------------------------------
-    def _on_click(self, _x, _y, button, pressed) -> None:
-        spec = self._MOUSE_MAP.get(button)
-        if not spec:
-            return
-        if pressed and self.ignore_ime and winapi.text_input_active():
-            # 正在打字（光标在输入框里 / 输入法拼字中）：这下的按下不算触发
-            return
-        self.state.set(spec, pressed)
-        try:
-            self.stateChanged.emit(spec, bool(pressed))
-        except RuntimeError:  # 窗口已销毁
-            pass
-
-    def _on_press(self, key) -> None:
-        name = winapi.canon_key(getattr(key, "name", None) or getattr(key, "char", "") or "")
-        if not name:
-            return
-        if self.ignore_ime and winapi.text_input_active():
-            # 正在打字：这一下按键交给前台程序，热键与键盘触发都不响应
-            debug.log("key", "blocked %s (typing: caret=%s ime=%s)"
-                      % (name, winapi.caret_visible(), winapi.ime_composing()))
-            return
-        debug.log("key", "press %s (ignore_ime=%s)" % (name, self.ignore_ime))
-        spec = "k:" + name
-        self.state.set(spec, True)
-        try:
-            self.stateChanged.emit(spec, True)
-            self.hotkeyPressed.emit(name)
-        except RuntimeError:
-            pass
-
-    def _on_release(self, key) -> None:
-        name = winapi.canon_key(getattr(key, "name", None) or getattr(key, "char", "") or "")
-        if not name:
-            return
-        spec = "k:" + name
-        self.state.set(spec, False)
-        try:
-            self.stateChanged.emit(spec, False)
-        except RuntimeError:
-            pass
+    # 键盘/鼠标事件由 app.hooks 的钩子线程直接调用 _on_key / _on_mouse。
 
 
 # ---------------------------------------------------------------- 目标窗口
@@ -213,6 +293,10 @@ class TargetRegistry(QObject):
             if changed:
                 self._hwnd, self._proc, self._title = hwnd, proc, title
         if changed:
+            debug.log("target", "hwnd=%s proc=%s title=%r class=%r area=%s"
+                      % (hwnd, proc, title,
+                         winapi.window_class(hwnd) if hwnd else "",
+                         winapi.client_area(hwnd) if hwnd else 0))
             try:
                 self.changed.emit(hwnd, proc, title)
             except RuntimeError:
@@ -271,7 +355,16 @@ class ClickWorker(threading.Thread):
         try:
             while not self._stop_event.is_set():
                 interval = max(0.001, self.channel.cfg.interval_ms / 1000.0)
-                if self.channel.is_clicking():
+                state = self.channel.is_clicking()
+                if state != getattr(self, "_logged_state", None):
+                    self._logged_state = state
+                    debug.log("click", "ch=%d state=%s enabled=%s down=%s spec=%s hwnd=%s fgself=%s"
+                              % (self.channel.index, state, self.channel.cfg.enabled,
+                                 self.channel.shared.input_state.is_down(self.channel.cfg.trigger_spec()),
+                                 self.channel.cfg.trigger_spec(),
+                                 self.channel.shared.registry.hwnd(),
+                                 winapi.foreground_is_self()))
+                if state:
                     if not engaged:
                         engaged = True
                         clock.acquire()

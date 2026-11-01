@@ -12,7 +12,7 @@ from typing import List, Optional
 import win32api
 import win32gui
 
-from PyQt5.QtCore import (QAbstractNativeEventFilter, QEasingCurve, QRect, Qt,
+from PyQt5.QtCore import (QAbstractNativeEventFilter, QEasingCurve, QEvent, QRect, Qt,
                             QTimer, QVariantAnimation, pyqtSignal)
 from PyQt5.QtGui import QCloseEvent, QColor, QShowEvent
 from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLineEdit, QMainWindow,
@@ -30,6 +30,7 @@ from .overlay_settings import OverlaySettingsDialog
 from .settings import SettingsDialog
 from .window_drag import CaptionDragMixin, _WindowDragFilter
 
+SYSTEM_HOTKEY_KEYS = frozenset("f%d" % index for index in range(1, 25))
 SAVE_DELAY_MS = 400
 TICK_MS = 110
 from .i18n import tr
@@ -55,8 +56,8 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         self._save_timer.timeout.connect(self._save_now)
 
         self.setWindowTitle(cfg_mod.APP_NAME)
-        self.setMinimumSize(660, 340)
-        self.resize(830, 360)
+        self.setMinimumSize(660, 240)
+        self.resize(720, 270)
 
         self.shared = engine.SharedState()
         self.shared.send_mode = self.cfg.send_mode
@@ -96,6 +97,7 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         self._tick_timer.setInterval(TICK_MS)
         self._tick_timer.timeout.connect(self._on_tick)
         self._tick_timer.start()
+        self._refresh_input_watch()
 
     # ------------------------------------------------------------- 界面
     def _build_ui(self) -> None:
@@ -164,6 +166,14 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         self.lbl_saved = w.label("", "Hint")
         footer.addWidget(self.lbl_saved)
         footer.addStretch(1)
+        self.btn_update_tip = QPushButton("", central)
+        self.btn_update_tip.setProperty("variant", "ghost")
+        self.btn_update_tip.setCursor(Qt.PointingHandCursor)
+        self.btn_update_tip.clicked.connect(self._open_update_dialog)
+        self.btn_update_tip.hide()
+        footer.addWidget(self.btn_update_tip)
+        self.lbl_admin = w.label("", "Hint")
+        footer.addWidget(self.lbl_admin)
         footer.addWidget(w.label("v%s" % cfg_mod.APP_VERSION, "Hint"))
         layout.addLayout(footer)
 
@@ -175,12 +185,12 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         self._drag_target = None
         self._drag_stamp = 0.0
         self._drag_timer = None
-        self._hotkey_ids = {}
-        self._hotkey_map = {}
-        self._hot_key = 0x4D00
         self._hot_last = ("", 0.0)
         self._hwnd = 0
         self._switcher = switch_mod.ThemeSwitcher(self)
+        self._update_worker = None
+        self._update_dialog = None
+        self._release = None
         self._drag_filter = _WindowDragFilter(self)
         app = QApplication.instance()
         if app is not None:
@@ -475,15 +485,38 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         finally:
             self._applying_lock = False
 
+    def _refresh_input_watch(self) -> None:
+        """把触发键与热键交给轮询通道补按（钩子收不到时仍然能触发）。"""
+        triggers = {}
+        hotkeys = {}
+        for card in getattr(self, "_card_widgets", []):
+            cfg = card.cfg
+            if getattr(cfg, "trigger_kind", "mouse") == "key":
+                name = winapi.canon_key(cfg.trigger_key)
+                vk = winapi.key_vk(name) if name else 0
+                spec = "k:" + name if name else ""
+            else:
+                spec = "m:" + cfg.trigger_mouse
+                vk = winapi.MOUSE_VK.get(cfg.trigger_mouse, 0)
+            if spec and vk:
+                triggers[spec] = vk
+            name = winapi.canon_key(card.cfg.hotkey)
+            hvk = winapi.key_vk(name) if name else 0
+            if hvk:
+                hotkeys[name] = hvk
+        hub = getattr(self, "hub", None)
+        if hub is not None:
+            hub.watch(triggers, hotkeys)
+
     def _on_card_changed(self) -> None:
         self.mark_dirty()
-        self._sync_hotkeys()
+        self._refresh_input_watch()
 
     def _on_card_renamed(self, index: int, name: str) -> None:
         self.mark_dirty()
         self._on_tick()
 
-    # ------------------------------------------------------------- 交互
+    # ------------------------------------------------------------- 热键
     def _on_hotkey(self, name: str) -> None:
         pressed = winapi.canon_key(name)
         now = time.perf_counter()
@@ -491,49 +524,24 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         if last_name == pressed and now - last_stamp < 0.16:
             return                      # 同一个键被两条通道各报了一次，只处理第一下
         self._hot_last = (pressed, now)
-        debug.log("hotkey", "fire %s" % pressed)
         for card in self._card_widgets:
             if card.cfg.hotkey and winapi.canon_key(card.cfg.hotkey) == pressed:
                 card.switch.setChecked(not card.switch.isChecked())
                 self.overlay.flash(card.index)
+                debug.log("hotkey", "fire %s -> ch%d switch=%s cfg=%s"
+                          % (pressed, card.index, card.switch.isChecked(), card.cfg.enabled))
 
-    def _sync_hotkeys(self) -> None:
-        """把两路的开关热键注册成系统级热键（作为全局钩子之外的兜底通道）。"""
-        hwnd = getattr(self, "_hwnd", 0)
-        if not hwnd:
+    def _refresh_admin_badge(self) -> None:
+        """页脚显示当前是否以管理员权限运行。"""
+        label = getattr(self, "lbl_admin", None)
+        if label is None:
             return
-        wanted = []
-        for card in self._card_widgets:
-            name = winapi.canon_key(card.cfg.hotkey or "")
-            if name and winapi.key_vk(name) and name not in wanted:
-                wanted.append(name)
-        if wanted == list(self._hotkey_ids.keys()):
-            return                      # 热键没变，不用反复注册
-        for hotkey_id in list(self._hotkey_ids.values()):
-            winapi.unregister_hotkey(hwnd, hotkey_id)
-        self._hotkey_ids = {}
-        self._hotkey_map = {}
-        for card in self._card_widgets:
-            name = winapi.canon_key(card.cfg.hotkey or "")
-            vk = winapi.key_vk(name)
-            if not vk or name in self._hotkey_map.values():
-                continue
-            hotkey_id = self._hot_key + len(self._hotkey_ids)
-            if winapi.register_hotkey(hwnd, hotkey_id, vk):
-                self._hotkey_ids[name] = hotkey_id
-                self._hotkey_map[hotkey_id] = name
-                debug.log("hotkey", "registered %s id=%d ok" % (name, hotkey_id))
-            else:
-                debug.log("hotkey", "register %s failed (另一个程序占用了这个键？)" % name)
-
-    def _clear_hotkeys(self) -> None:
-        hwnd = getattr(self, "_hwnd", 0)
-        if not hwnd:
-            return
-        for hotkey_id in list(self._hotkey_ids.values()):
-            winapi.unregister_hotkey(hwnd, hotkey_id)
-        self._hotkey_ids = {}
-        self._hotkey_map = {}
+        if winapi.is_admin():
+            label.setText(tr("admin_status"))
+            label.setStyleSheet("color:#16a34a;")
+        else:
+            label.setText(tr("admin_status_limited"))
+            label.setStyleSheet("color:#dc2626;")
 
     def _on_input_failed(self, message: str) -> None:
         self.lbl_target.setText(tr("input_hook_unavailable"))
@@ -640,15 +648,57 @@ class MainWindow(CaptionDragMixin, QMainWindow):
         if not getattr(self, "_dwm_done", False):
             self._dwm_done = True
             winapi.apply_dark_titlebar(int(self.winId()), theme_mod.is_dark(self.cfg.appearance.theme))
+        if not getattr(self, "_admin_done", False):
+            self._admin_done = True
+            self._refresh_admin_badge()
         if not getattr(self, "_hotkeys_done", False):
-            # 句柄有了才能注册系统级热键（两路开关热键的兜底通道）
+            # 输入监听只装在启动时一次，这里不再重复注册
             self._hotkeys_done = True
-            self._sync_hotkeys()
+        if not getattr(self, "_update_check_done", False) and self.cfg.check_updates:
+            # 启动后安静地查一次新版本，有结果就在底部显示提示
+            self._update_check_done = True
+            QTimer.singleShot(1600, self._start_update_check)
         if not getattr(self, "_first_fit_done", False):
             self._first_fit_done = True
             if not self.cfg.geometry:
                 # 第一次打开（没有保存过窗口几何）：直接贴合内容，不留空白
-                QTimer.singleShot(0, lambda: self._fit_height(allow_shrink=True, animate=False))
+                QTimer.singleShot(0, lambda: self._fit_height(allow_shrink=True, animate=True))
+
+    # ------------------------------------------------------------- 更新
+    def _start_update_check(self) -> None:
+        from . import update_dialog
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        self._update_worker = update_dialog.check_in_background(
+            self, self._on_update_found, self._on_update_check_failed)
+
+    def _on_update_found(self, release) -> None:
+        from . import updater
+        if not updater.is_newer(cfg_mod.APP_VERSION, release.version_text):
+            debug.log("update", "up to date (%s)" % release.tag)
+            return
+        self._release = release
+        debug.log("update", "new release %s" % release.tag)
+        self.btn_update_tip.setText(tr("update_found_tip") % release.tag)
+        self.btn_update_tip.show()
+
+    def _on_update_check_failed(self, message: str) -> None:
+        debug.log("update", "startup check failed: %s" % message)
+
+    def _open_update_dialog(self) -> None:
+        from . import update_dialog
+        if self._release is None:
+            return
+        if self._update_dialog is not None:
+            try:
+                self._update_dialog.close()
+            except Exception:
+                pass
+        dialog = update_dialog.UpdateDialog(self._release, self)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._update_dialog = dialog
 
     def closeEvent(self, event: QCloseEvent) -> None:
         filt = getattr(self, "_drag_filter", None)
@@ -664,7 +714,6 @@ class MainWindow(CaptionDragMixin, QMainWindow):
             cfg_mod.save_config(self.cfg)
         except cfg_mod.ConfigError:
             pass
-        self._clear_hotkeys()
         self._tick_timer.stop()
         self.overlay.hide()
         if self._settings is not None:

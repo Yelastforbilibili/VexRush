@@ -193,6 +193,7 @@ def write_test_config():
     # 这轮测的是「两路互不影响 + 热键 + 真实鼠标」，防卡手那种「只能开一路」的
     # 行为在 selftest 里单独测，这里必须关掉，否则热键一拨就把另一路踢掉了。
     cfg.exclusive = False
+    cfg.check_updates = False      # 不同网络环境会让检查耗时不同，测试里关掉
     cfg.restore_previous = False
 
     left = cfg.channels[0]
@@ -221,6 +222,18 @@ def restore_config():
         with open(BACKUP, "rb") as src, open(CONFIG, "wb") as dst:
             dst.write(src.read())
         os.remove(BACKUP)
+
+
+def wait_enabled_change(index: int, previous, timeout: float = 3.0):
+    """等配置里这一路的开关状态变过来（存档有 400ms 防抖，钩子投递也有延迟）。"""
+    deadline = time.time() + timeout
+    latest = previous
+    while time.time() < deadline:
+        latest = saved_enabled(index)
+        if latest is not None and latest != previous:
+            return latest
+        time.sleep(0.1)
+    return latest
 
 
 def saved_enabled(index: int):
@@ -272,9 +285,34 @@ def read_int_file(path):
         return 0
 
 
+def kill_leftovers() -> None:
+    """清掉上一轮（跑挂了）留下的源码版实例。
+
+    这些实例同样以 python.exe 的身份存在、窗口标题也叫 VexRush，留着会让被测程序
+    把「另一个自己」当成目标窗口，连点就全打到自己身上了。
+    """
+    import psutil
+
+    me = os.getpid()
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if proc.info["pid"] == me:
+                continue
+            name = (proc.info["name"] or "").lower()
+            if name not in ("python.exe", "pythonw.exe"):
+                continue
+            if "main.py" not in " ".join(proc.info["cmdline"] or []):
+                continue
+            proc.terminate()
+        except Exception:
+            continue
+    time.sleep(0.6)
+
+
 def launch_app():
     env = dict(os.environ)
     env["APPDATA"] = TEST_APPDATA
+    env["VEXRUSH_DEBUG"] = os.path.join(ROOT, "__e2e_debug.log")
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     proc = subprocess.Popen([sys.executable, MAIN_PY, "--multi"], cwd=ROOT, env=env)
     hwnd = wait_for(lambda: (find_by_pid(proc.pid) or [0])[0], 20.0)
@@ -297,6 +335,7 @@ def kill(proc):
 # ---------------------------------------------------------------- 主流程
 def main():
     dpi_aware()
+    kill_leftovers()
     target = app = None
     try:
         write_test_config()
@@ -323,24 +362,23 @@ def main():
         check("按下与抬起成对", first["up"] - base["up"] == gained,
               "down=%d up=%d" % (gained, first["up"] - base["up"]))
         time.sleep(0.5)
-        check("松手后立即停止", read_counts()["down"] - first["down"] == 0,
-              "又多了 %d 次" % (read_counts()["down"] - first["down"]))
+        settled = read_counts_settled()
+        check("松手后立即停止", settled["down"] - first["down"] == 0,
+              "又多了 %d 次" % (settled["down"] - first["down"]))
 
         # ---- B2. 字母热键（用户复现：热键设成 x 时按了没反应）
         before = saved_enabled(0)
         key_event(VK_X, True)
         time.sleep(0.06)
         key_event(VK_X, False)
-        time.sleep(1.0)
-        after = saved_enabled(0)
+        after = wait_enabled_change(0, before, timeout=3.0)
         check("字母热键 x 能切换这一路", after is not None and after != before,
               "%s -> %s" % (before, after))
         # 再按一次切回开启，后面的用例还要用它
         key_event(VK_X, True)
         time.sleep(0.06)
         key_event(VK_X, False)
-        time.sleep(1.0)
-        restored = saved_enabled(0)
+        restored = wait_enabled_change(0, after, timeout=3.0)
         check("再按一次 x 能切回来", restored == before, str(restored))
 
         # ---- C. 真实右键 → 右键连点
@@ -380,7 +418,7 @@ def main():
         guard_base = read_counts_settled()
         hold_ok = hold_key_and_watch_foreground(app_hwnd, VK_F19, 0.7)
         time.sleep(0.8)
-        guarded = read_counts()["down"] - guard_base["down"]
+        guarded = read_counts_settled()["down"] - guard_base["down"]
         if hold_ok:
             check("本窗口在前台时不往外连点", guarded == 0, "多了 %d 次" % guarded)
         else:

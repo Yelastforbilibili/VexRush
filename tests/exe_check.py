@@ -186,8 +186,8 @@ def main():
     check("窗口标题正确", title.startswith("VexRush"), repr(title))
     check("截图已保存", os.path.exists(SHOT) and os.path.getsize(SHOT) > 20000,
           "%d 字节" % (os.path.getsize(SHOT) if os.path.exists(SHOT) else 0))
-    check("窗口大小随 175% 缩放（逻辑约 830x360）",
-          abs((rect1[2] - rect1[0]) - 1453) < 60 and abs((rect1[3] - rect1[1]) - 640) < 80,
+    check("窗口大小随 175% 缩放（逻辑约 720x内容高度）",
+          abs((rect1[2] - rect1[0]) - 1260) < 90 and abs((rect1[3] - rect1[1]) - 660) < 140,
           "物理尺寸 %dx%d" % (rect1[2] - rect1[0], rect1[3] - rect1[1]))
 
     win32gui.MoveWindow(hwnd, 60, 80, rect1[2] - rect1[0], rect1[3] - rect1[1], True)

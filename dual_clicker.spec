@@ -12,10 +12,7 @@ a = Analysis(
         ('assets/fonts/LICENSE-ChillRound.txt', 'assets/fonts'),
         ('assets/lang', 'assets/lang'),
     ],
-    hiddenimports=[
-        'pynput.keyboard._win32',
-        'pynput.keyboard._darwin',
-        'pynput.mouse._win32',
+    hiddenimports=["pynput.keyboard._win32", "pynput.mouse._win32", 
         'win32timezone',
     ],
     hookspath=[],

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from app.i18n import tr
 
@@ -38,8 +39,25 @@ def _acquire_instance_lock():
         return True
 
 
+def _redirect_stderr() -> None:
+    """窗口版没有控制台，把 stderr 落到日志目录，方便排查后台线程的异常。"""
+    if sys.stderr is not None:
+        return
+    try:
+        from app import config as cfg_mod
+        folder = os.path.join(cfg_mod.data_dir(), "logs")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "stderr.log")
+        stream = open(path, "a", encoding="utf-8", buffering=1)
+        sys.stderr = stream
+        sys.stdout = sys.stdout or stream
+    except Exception:
+        pass
+
+
 def main(argv=None) -> int:
     args = list(sys.argv if argv is None else argv)
+    _redirect_stderr()
     enable_high_dpi()
 
     from PyQt5.QtWidgets import QApplication, QMessageBox
